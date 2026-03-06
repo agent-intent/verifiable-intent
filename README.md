@@ -132,7 +132,15 @@ and delegates the decision; the user may not be present at transaction time.
 
 ## Quick Start
 
+### Prerequisites
+
+- Python 3.10+
+- pip 22+
+
 ```bash
+# Verify Python version
+python --version
+
 # Install (using uv)
 uv venv .venv && source .venv/bin/activate
 uv pip install -e ".[dev]"

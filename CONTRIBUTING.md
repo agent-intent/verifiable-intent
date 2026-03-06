@@ -65,7 +65,15 @@ or OpenAPI spec where available.
 
 ## Getting Started
 
+### Prerequisites
+
+- Python 3.10+
+- pip 22+
+
 ```bash
+# Verify Python version
+python --version
+
 # Clone the repo
 git clone https://github.com/agent-intent/verifiable-intent.git
 cd verifiable-intent
