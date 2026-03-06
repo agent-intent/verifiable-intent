@@ -139,7 +139,15 @@ uv pip install -e ".[dev]"
 
 # Or using pip
 python -m venv .venv && source .venv/bin/activate
+
+# Recommended: upgrade pip for pyproject/hatchling editable installs
+python -m pip install --upgrade pip
+
+# Editable install (developer workflow)
 pip install -e ".[dev]"
+
+# Fallback if editable install is not supported in your environment:
+# pip install ".[dev]"
 
 # Run an example
 python examples/autonomous_flow.py
