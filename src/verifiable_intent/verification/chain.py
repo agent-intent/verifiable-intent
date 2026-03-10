@@ -213,7 +213,7 @@ def verify_chain(
 
     # 1b. Validate _sd_alg on L1
     l1_sd_alg = l1.payload.get("_sd_alg")
-    if l1_sd_alg is not None and l1_sd_alg != "sha-256":
+    if l1_sd_alg != "sha-256":
         result.errors.append(f"L1 _sd_alg must be 'sha-256', got '{l1_sd_alg}'")
         return result
 
@@ -265,7 +265,7 @@ def verify_chain(
 
     # 4a2. Validate _sd_alg on L2
     l2_sd_alg = l2.payload.get("_sd_alg")
-    if l2_sd_alg is not None and l2_sd_alg != "sha-256":
+    if l2_sd_alg != "sha-256":
         result.errors.append(f"L2 _sd_alg must be 'sha-256', got '{l2_sd_alg}'")
         return result
 
@@ -561,7 +561,7 @@ def verify_chain(
                     result.checks_performed.append(f"pair_{pair_idx}_identity_binding")
 
                 l3_sd_alg = l3.payload.get("_sd_alg")
-                if l3_sd_alg is not None and l3_sd_alg != "sha-256":
+                if l3_sd_alg != "sha-256":
                     result.errors.append(f"{l3_label} _sd_alg must be 'sha-256', got '{l3_sd_alg}'")
                     return result
 

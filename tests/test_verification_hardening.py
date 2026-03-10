@@ -444,6 +444,45 @@ class TestSdAlgValidation:
         assert not result.valid
         assert any("_sd_alg" in e and "sha-512" in e for e in result.errors)
 
+    def test_missing_sd_alg_l1_rejected(self):
+        """L1 with _sd_alg absent must be rejected (claim is REQUIRED per spec)."""
+        issuer = get_issuer_keys()
+        user = get_user_keys()
+        now = int(time.time())
+        l1 = _make_l1(issuer, user, now)
+
+        payload_without = {k: v for k, v in l1.payload.items() if k != "_sd_alg"}
+        l1_no_alg = SdJwt(
+            header=l1.header,
+            payload=payload_without,
+            signature=l1.signature,
+            disclosures=l1.disclosures,
+            disclosure_values=l1.disclosure_values,
+        )
+
+        l2 = _make_immediate_l2(user, l1, now)
+
+        result = verify_chain(l1_no_alg, l2, skip_issuer_verification=True)
+        assert not result.valid
+        assert any("_sd_alg" in e for e in result.errors)
+
+    def test_missing_sd_alg_l2_rejected(self):
+        """L2 with _sd_alg absent must be rejected (claim is REQUIRED per spec)."""
+        from verifiable_intent.crypto.sd_jwt import create_sd_jwt
+
+        issuer = get_issuer_keys()
+        user = get_user_keys()
+        now = int(time.time())
+        l1 = _make_l1(issuer, user, now)
+        l2 = _make_immediate_l2(user, l1, now)
+
+        payload_without = {k: v for k, v in l2.payload.items() if k != "_sd_alg"}
+        l2_no_alg = create_sd_jwt(l2.header, payload_without, l2.disclosures, user.private_key)
+
+        result = verify_chain(l1, l2_no_alg, issuer_public_key=issuer.public_key)
+        assert not result.valid
+        assert any("_sd_alg" in e for e in result.errors)
+
 
 # --- Fix #5: Model-level mode enforcement ---
 
@@ -1087,6 +1126,7 @@ class TestEmptyMandateSet:
             "aud": "https://www.agent.com",
             "iat": now,
             "sd_hash": hash_bytes(l1.serialize().encode("ascii")),
+            "_sd_alg": "sha-256",
             "mode": "immediate",
             "delegate_payload": [],
         }
@@ -1115,6 +1155,7 @@ class TestEmptyMandateSet:
             "aud": "https://www.agent.com",
             "iat": now,
             "sd_hash": hash_bytes(l1.serialize().encode("ascii")),
+            "_sd_alg": "sha-256",
             "delegate_payload": [],
         }
         # No open or final VCTs → mode inferred as immediate → expect kb-sd-jwt typ
@@ -1144,6 +1185,7 @@ class TestMalformedJwk:
             "iat": now,
             "exp": now + 86400,
             "vct": "https://credentials.mastercard.com/card",
+            "_sd_alg": "sha-256",
             "pan_last_four": "1234",
             "scheme": "Mastercard",
             "cnf": {"jwk": {"kty": "EC", "crv": "P-256", "y": user.public_jwk["y"]}},
@@ -1157,6 +1199,7 @@ class TestMalformedJwk:
             "aud": "test",
             "iat": now,
             "sd_hash": hash_bytes(l1.serialize().encode("ascii")),
+            "_sd_alg": "sha-256",
             "delegate_payload": [],
         }
         l2_header = {"alg": "ES256", "typ": "kb-sd-jwt"}
@@ -1183,6 +1226,7 @@ class TestMalformedJwk:
             "pan_last_four": "1234",
             "scheme": "Mastercard",
             "cnf": {"jwk": {"kty": "EC", "crv": "P-256", "x": "!!!invalid!!!", "y": "!!!bad!!!"}},
+            "_sd_alg": "sha-256",
         }
         l1_header = {"alg": "ES256", "typ": "sd+jwt"}
         l1 = create_sd_jwt(l1_header, l1_payload, [], issuer.private_key)
@@ -1192,6 +1236,7 @@ class TestMalformedJwk:
             "aud": "test",
             "iat": now,
             "sd_hash": hash_bytes(l1.serialize().encode("ascii")),
+            "_sd_alg": "sha-256",
             "delegate_payload": [],
         }
         l2_header = {"alg": "ES256", "typ": "kb-sd-jwt"}
@@ -1229,6 +1274,7 @@ class TestUnrecognizedVct:
             "aud": "test",
             "iat": now,
             "sd_hash": hash_bytes(l1_ser.encode("ascii")),
+            "_sd_alg": "sha-256",
             "delegate_payload": [{"...": disc_hash}],
         }
         l2_header = {"alg": "ES256", "typ": "kb-sd-jwt"}
