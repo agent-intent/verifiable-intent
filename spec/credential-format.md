@@ -152,13 +152,16 @@ L2 contains an `sd_hash` binding it to the serialized L1.
 |-----------|------|----------|-------------|
 | `alg` | string | REQUIRED | MUST be `"ES256"`. |
 | `typ` | string | REQUIRED | MUST be `"kb-sd-jwt"` (Immediate mode) or `"kb-sd-jwt+kb"` (Autonomous mode). |
+| `kid` | string | REQUIRED | User's key identifier from the corresponding L1 cnf.jwk.kid. Verifiers resolve the L2 signing key directly from L1 cnf.jwk.|
+
 
 ### 4.3 JWT Payload — Always-Visible Claims
 
 | Claim | Type | Required | Description |
 |-------|------|----------|-------------|
 | `nonce` | string | REQUIRED | Cryptographically random nonce. Prevents replay attacks. |
-| `aud` | string | REQUIRED | Intended audience URI. MUST identify the payment network or verifier. |
+| `iss` | string | REQUIRED | Credential Provider identifier URI. Identifies the wallet or credential provider that signed the L2. MUST be a stable, dereferenceable URI. |
+| `aud` | string | REQUIRED | Intended audience URI. MUST identify the agent or verifier. |
 | `iat` | integer | REQUIRED | Issued-at time (Unix timestamp). |
 | `exp` | integer | REQUIRED | Expiration time. Immediate mode: SHOULD be no more than 15 minutes from `iat`. Autonomous mode: SHOULD be no more than 30 days from `iat`; SHOULD use the shortest duration appropriate for the use case. |
 | `sd_hash` | string | REQUIRED | Base64url-encoded SHA-256 hash of the serialized L1 SD-JWT string: `B64U(SHA-256(ASCII(serialized_L1)))`. |
@@ -249,6 +252,7 @@ and binds the agent's key for L3 delegation.
 | `cnf` | object | REQUIRED | Confirmation claim containing `cnf.jwk` with the agent's public key and `cnf.kid` with a key identifier. MUST match the `cnf` in the checkout mandate of the same mandate pair. |
 | `payment_instrument` | object | REQUIRED | Payment instrument descriptor. See §4.4.2 for structure. |
 | `constraints` | array | REQUIRED | Array of constraint objects bounding the agent's payment authority. MUST contain at least one constraint. |
+| `risk_data` | object | OPTIONAL | A map of relevant risk signals collected by the credential provider at time of mandate creation |
 
 > **Note**: Recurrence terms (subscription setup, agent-managed recurring purchases) are
 > expressed as constraint types (`payment.recurrence`, `payment.agent_recurrence`) within
