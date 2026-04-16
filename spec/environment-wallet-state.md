@@ -1,9 +1,9 @@
 # Verifiable Intent — Wallet State Attestation Constraint Proposal
 
 **Type identifier**: `environment.wallet_state`
-**Version**: 0.1-draft
+**Version**: 0.2-draft
 **Status**: Draft / Proposed for Registration
-**Date**: 2026-04-15
+**Date**: 2026-04-16
 **Author**: Douglas Borthwick (InsumerAPI)
 **License**: Apache 2.0
 
@@ -40,10 +40,11 @@ the same condition at L3 verification time.
 
 This specification covers:
 - The `environment.wallet_state` constraint schema
+- The abstract attestation interface any conformant issuer MUST implement (§4)
 - The attestation verification algorithm agents and verifiers MUST implement
 - Fail-closed failure handling requirements
 - Security considerations specific to on-chain state dependencies
-- A reference implementation (InsumerAPI)
+- A reference implementation (InsumerAPI) in §7
 - A concrete answer to §8 Q2 of the `environment.market_state` proposal
   (trusted-issuer policy via JWKS key binding rather than URL binding)
 
@@ -71,9 +72,9 @@ appear in ALL CAPITALS, as shown here.
 JSON data structures follow [RFC 8259]. All field names are case-sensitive.
 
 The term **attestation** refers to a JSON Web Token ([RFC 7519]) representing
-a signed on-chain state claim conforming to the InsumerAPI wallet-attestation
-format or any compatible JWT+JWKS format that satisfies the verification
-requirements in §4.
+a signed state claim that satisfies the verification requirements in §4. Any
+issuer whose JWT output conforms to the abstract interface defined in §4.1 is
+a valid attestation provider for this constraint type.
 
 The term **condition hash** refers to a deterministic hash over a JSON-encoded
 boolean condition predicate (e.g., "does wallet `W` hold at least `T` units of
@@ -91,10 +92,10 @@ content rather than re-evaluating the predicate against raw balances.
 instructs the verifying agent or verifier to:
 
 1. Fetch a signed wallet state attestation from a designated issuer endpoint
-2. Verify the ES256 JWT signature against the issuer's published JWKS
+2. Verify the JWT signature against the issuer's published JWKS
 3. Confirm the JWT's `iss`, `sub`, and `kid` claims match the constraint
 4. Confirm the attestation is not expired (`exp`) and is within the constraint's
-   `max_age_seconds` window (derived from `iat`)
+   `max_attestation_age` window (derived from `iat`)
 5. Confirm the attestation `conditionHash` array contains every hash the
    constraint requires
 6. Confirm the attestation `pass` field is `true`
@@ -203,7 +204,7 @@ entry:
 
 | Type | Defined In | Version | Disclosure Form |
 |------|-----------|---------|-----------------|
-| `environment.wallet_state` | This document | 0.1-draft | property (full constraint) |
+| `environment.wallet_state` | This document | 0.2-draft | property (full constraint) |
 
 ---
 
@@ -237,7 +238,7 @@ agent MUST NOT proceed on uncertainty.
 | `expected_issuer` | string | Yes | The JWT `iss` claim value the verifier MUST require. The verifier MUST reject attestations whose `iss` differs from this value. |
 | `subject_wallet` | string | Yes | The wallet address that MUST appear in the JWT `sub` claim. Binds the attestation to a specific payment source. |
 | `required_condition_hashes` | array of string | Yes | One or more condition hashes (hex strings) the JWT `conditionHash` array MUST contain. Every value in this list MUST be present in the attestation's `conditionHash` array. Extra hashes in the attestation are permitted. |
-| `max_age_seconds` | integer | No | Maximum age in seconds of the attestation, measured from JWT `iat` to the time of verification. Default: `300`. MUST be a positive integer. Verifiers MUST reject attestations where `(now − iat) > max_age_seconds`, even if `exp` has not yet passed. |
+| `max_attestation_age` | integer | Yes | Maximum age in seconds of the attestation, measured from JWT `iat` to the time of verification. MUST be a positive integer. Verifiers MUST reject attestations where `(now − iat) > max_attestation_age`, even if `exp` has not yet passed. When absent for backwards compatibility with v0.1, verifiers MUST apply a default of `300`. Mandate issuers SHOULD always include this field explicitly. See §4.6 for rationale. |
 | `attestation_request_body` | object | No | Optional POST body the verifier sends to `attestation_url` when fetching a fresh attestation. Verifiers MUST NOT trust this body to alter the expected claims — all binding is enforced by `expected_kid`, `expected_issuer`, `subject_wallet`, and `required_condition_hashes`. |
 
 #### Field Constraints
@@ -253,39 +254,58 @@ agent MUST NOT proceed on uncertainty.
 - `required_condition_hashes` MUST be a non-empty array. Zero-length arrays
   MUST be rejected as malformed (a wallet-state constraint with no conditions
   to match is meaningless).
-- `max_age_seconds` defaults to `300` when absent. Values less than `1` MUST
-  be rejected as malformed. Values exceeding the issuer's JWT TTL (typically
-  1800 seconds for InsumerAPI) SHOULD be rejected by implementations that know
-  the issuer's TTL out-of-band.
+- `max_attestation_age` MUST be a positive integer (`>= 1`). Values less than
+  `1` MUST be rejected as malformed. When absent, verifiers MUST apply a
+  default of `300` seconds.
 
-### 4.1 Attestation JWT Format
+### 4.1 Abstract Attestation Interface
 
-The JWT returned in the `jwt` field of the attestation endpoint response MUST
-have the following claims. Additional claims MAY be present; verifiers MUST
-NOT strip claims before signature verification.
+This section defines the normative contract that any conformant wallet-state
+attestation issuer MUST implement. The contract is intentionally minimal: it
+specifies the claims the verification algorithm (§4.2) requires, and nothing
+else. Issuers MAY include additional claims beyond those listed here;
+verifiers MUST NOT strip claims before signature verification.
 
-**JWT header**:
+**Request**: Verifiers MUST send an HTTPS POST to `attestation_url` with a
+JSON body. The request body schema is issuer-specific and is carried in the
+constraint's `attestation_request_body` field. The response MUST be a JSON
+object containing a `jwt` field whose value is a compact-serialized JWS
+([RFC 7515]).
+
+**JWT header** (REQUIRED fields):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `alg` | string | Signing algorithm identifier. MUST be a named JWS algorithm (e.g., `ES256`, `EdDSA`). See §8 Q2 for algorithm negotiation. |
+| `alg` | string | Signing algorithm identifier. MUST be a named JWS algorithm per §4.7 (Algorithm Agility). For `environment.wallet_state`, the MUST-implement algorithm is `ES256`. |
 | `typ` | string | MUST be `"JWT"`. |
 | `kid` | string | Key identifier. MUST match `expected_kid` in the constraint. |
 
-**JWT payload**:
+**JWT payload — REQUIRED claims** (normative; used by the verification
+algorithm in §4.2):
 
-| Field | Type | Description |
+| Claim | Type | Description |
 |-------|------|-------------|
 | `iss` | string (URL) | Issuer identifier. MUST match `expected_issuer` in the constraint. |
-| `sub` | string | Subject wallet address. MUST match `subject_wallet` in the constraint. |
-| `jti` | string | Unique attestation identifier (for deduplication and audit logging). |
-| `iat` | integer (unix seconds) | Time the attestation was signed. |
+| `sub` | string | Subject wallet address. MUST match `subject_wallet` in the constraint. This is the standard JWT subject claim ([RFC 7519] §4.1.2), carrying the wallet address as the attestation subject — "this attestation is about this payment source" is a native JWT claim check. |
+| `jti` | string | Unique attestation identifier ([RFC 7519] §4.1.7). Used for deduplication and audit logging. |
+| `iat` | integer (unix seconds) | Time the attestation was signed. Used by the `max_attestation_age` check (§4.2 Step 8). |
 | `exp` | integer (unix seconds) | Time after which the attestation MUST NOT be acted upon. |
 | `pass` | boolean | Aggregate condition evaluation result. MUST be `true` for the constraint to be satisfied. |
-| `conditionHash` | array of string | One hash per evaluated condition, in evaluation order. Every value in `required_condition_hashes` MUST appear in this array. |
-| `results` | array of object | Per-condition evaluation detail. Verifiers MAY log this for audit but MUST NOT use it as a substitute for the `conditionHash` check. |
-| `blockNumber` | string (hex, optional) | Block number at which the first condition was evaluated. Recorded for audit trail. |
-| `blockTimestamp` | ISO 8601 (optional) | Block timestamp at which the first condition was evaluated. Recorded for audit trail. |
+| `conditionHash` | array of string | One hash per evaluated condition. Every value in `required_condition_hashes` MUST appear in this array. Hash values are opaque hex strings; the canonicalization algorithm is issuer-specific (see §7 for the reference implementation's algorithm). |
+
+**JWT payload — OPTIONAL claims** (not used by the verification algorithm;
+issuers MAY include these for audit, debugging, or application-layer
+consumption):
+
+| Claim | Type | Description |
+|-------|------|-------------|
+| `results` | array of object | Per-condition evaluation detail. Useful for debugging and audit trails, but verifiers MUST NOT use it as a substitute for the `conditionHash` and `pass` checks. |
+| `blockNumber` | string | Block number or ledger index at which the condition was evaluated. Provides a chain-anchored audit trail. |
+| `blockTimestamp` | string (ISO 8601) | Block timestamp at which the condition was evaluated. |
+
+Issuers MAY include additional claims beyond those listed above. The
+verification algorithm (§4.2) is defined solely in terms of the REQUIRED
+claims; OPTIONAL and additional claims do not affect constraint satisfaction.
 
 **Key discovery**: Verifiers MUST resolve the public key by fetching
 `trusted_jwks` and locating the JWK whose `kid` matches the JWT header `kid`.
@@ -321,9 +341,9 @@ function check_environment_wallet_state(C, now):
         return violation("subject_wallet must be non-empty")
     if length(C.required_condition_hashes) == 0:
         return violation("required_condition_hashes must be non-empty")
-    let max_age = C.max_age_seconds ?? 300
+    let max_age = C.max_attestation_age ?? 300
     if max_age < 1:
-        return violation("max_age_seconds must be >= 1")
+        return violation("max_attestation_age must be >= 1")
 
     # Step 2 — Fetch attestation (timeout: 4 seconds)
     let body = C.attestation_request_body ?? {}
@@ -365,10 +385,10 @@ function check_environment_wallet_state(C, now):
     if now_unix() > payload.exp:
         return violation("Attestation has expired (exp in past): fail-closed")
 
-    # Step 8 — Verify attestation age against max_age_seconds
+    # Step 8 — Verify attestation age against max_attestation_age
     let age_seconds = now_unix() - payload.iat
     if age_seconds > max_age:
-        return violation("Attestation age exceeds max_age_seconds: fail-closed")
+        return violation("Attestation age exceeds max_attestation_age: fail-closed")
 
     # Step 9 — Verify pass is true
     if payload.pass != true:
@@ -434,7 +454,7 @@ Checkout mandate constraint requiring the source wallet to hold at least
   "required_condition_hashes": [
     "0xc938b71ac78df5843d6823dd78ee0a5b64dd56fa850984e954dd070285169444"
   ],
-  "max_age_seconds": 300,
+  "max_attestation_age": 300,
   "attestation_request_body": {
     "wallet": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
     "conditions": [
@@ -463,7 +483,7 @@ mandate, both MUST be satisfied before L3:
       "attestation_url": "https://headlessoracle.com/v5/demo?mic=XNYS",
       "oracle_public_key_id": "key_2026_v1",
       "expected_status": "OPEN",
-      "max_age_seconds": 60
+      "max_attestation_age": 60
     },
     {
       "type": "environment.wallet_state",
@@ -475,7 +495,7 @@ mandate, both MUST be satisfied before L3:
       "required_condition_hashes": [
         "0xc938b71ac78df5843d6823dd78ee0a5b64dd56fa850984e954dd070285169444"
       ],
-      "max_age_seconds": 300,
+      "max_attestation_age": 300,
       "attestation_request_body": {
         "wallet": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
         "conditions": [
@@ -498,6 +518,72 @@ This is the composition the `environment.*` namespace is designed to make
 expressible: *NYSE must be open **and** my wallet must still hold ≥1 USDC on
 Ethereum* — both checks independently signed, independently verifiable,
 independently fail-closed.
+
+### 4.6 Attestation Freshness and TOCTOU
+
+The `max_attestation_age` field is the mandate issuer's normative declaration
+of the maximum acceptable TOCTOU window between attestation signing and
+constraint evaluation. It is the primary security property of any
+`environment.*` constraint: the freshness window is the exploitable surface.
+
+**Why this field is REQUIRED.** The DeFi oracle exploit literature — Mango
+Markets ($117M, 2022), Balancer ($116M, 2023), and the broader class of
+flash-loan-enabled TOCTOU attacks — demonstrates that when freshness is left
+as an implementation default rather than an explicit policy declaration,
+exploitable gaps are the norm, not the exception. Attestation TTL (the
+issuer's `exp` claim) is a provider-side default; `max_attestation_age` is a
+consumer-side policy bound. The two serve different principals and MUST be
+independently configurable.
+
+**Family-wide semantics.** For any `environment.*` constraint,
+`max_attestation_age` carries the same meaning: the mandate issuer's
+declaration of the maximum acceptable TOCTOU window between attestation
+signing (`iat`) and constraint evaluation (`now`). This field SHOULD use the
+same name and semantics across all `environment.*` constraint types to enable
+a single verification code path. The `environment.market_state` specification
+(PR #9) is invited to adopt this field and semantics for lockstep alignment.
+
+**Guidance for mandate issuers.** Values SHOULD reflect the economic risk
+of the gated action. Payment execution against volatile assets may warrant
+`max_attestation_age: 30`; compliance checks against stable state may tolerate
+`max_attestation_age: 300`. The reference implementation (§7) issues
+attestations with a 1800-second TTL; mandate issuers can narrow this to any
+shorter window via `max_attestation_age`.
+
+### 4.7 Algorithm Agility
+
+**Family-wide policy.** The `environment.*` constraint family is
+algorithm-agnostic at the family level, per [RFC 8725] §3.1 ("Algorithm
+Verification"). Each constraint type declares a MUST-implement signing
+algorithm that all conformant verifiers for that type MUST support:
+
+| Constraint type | MUST-implement | Rationale |
+|-----------------|---------------|-----------|
+| `environment.wallet_state` | ES256 (P-256) | Composes with VI's existing ES256/SD-JWT stack (design-rationale §5); standard JWS base64url encoding, no custom canonicalization required. |
+| `environment.market_state` | Ed25519 | Matches the reference implementation's signing stack (Headless Oracle); high-performance single-curve verification. |
+
+Each constraint type SHOULD additionally support a RECOMMENDED extension set
+and MAY support further algorithms. For `environment.wallet_state`:
+
+- MUST: `ES256`
+- SHOULD: `ES384`, `ES512`
+- MAY: `EdDSA` (Ed25519, Ed448)
+
+Verifiers negotiate the algorithm per constraint instance by reading the JWT
+header `alg` field and confirming it is in their supported set for the
+constraint type. Verifiers MUST reject attestations whose `alg` is not in
+their supported set — this is a fail-closed check, not a silent downgrade.
+
+**Avoiding accidental single-algorithm lock-in.** This agility model ensures
+the `environment.*` family does not inherit a single-algorithm constraint by
+accident. Each type's MUST-implement choice is defensible from its reference
+implementation's signing stack; the extension sets ensure verifier libraries
+can evolve without spec revisions.
+
+> **Note for PR #9 coordination**: This section is drafted as a standalone
+> block that can be adopted verbatim in `environment.market_state` §8 with
+> the table rows swapped. The intent is one family-wide question, one answer,
+> two specs.
 
 ---
 
@@ -567,20 +653,18 @@ HTTPS URL is valid provided it is referenced explicitly by the constraint.
 Initial trust in the issuer domain requires out-of-band verification (DNSSEC,
 CT logs, published key fingerprints). Agents and verifiers SHOULD verify the
 issuer's JWKS against at least one out-of-band source before trusting
-attestations. InsumerAPI publishes its JWKS at:
-- `https://api.insumermodel.com/.well-known/jwks.json`
-- Documented in the `.well-known` block of `https://api.insumermodel.com/llms.txt`
+attestations.
 
 ### 6.2 Attestation Replay
 
 A valid signed attestation is replayable within its `exp` window. The
-`max_age_seconds` field narrows this window below `exp` when needed. The
+`max_attestation_age` field narrows this window below `exp` when needed. The
 `jti` claim enables consumers that require per-attestation deduplication to
 detect and reject replayed attestations within the TTL window.
 
 For payment execution contexts, verifiers SHOULD maintain a short-lived
-`jti` deduplication cache (TTL: `max_age_seconds + 30s`) to prevent a single
-attestation from being used to authorise multiple L3 creations.
+`jti` deduplication cache (TTL: `max_attestation_age + 30s`) to prevent a
+single attestation from being used to authorise multiple L3 creations.
 
 ### 6.3 Issuer Endpoint Substitution (Answer to Companion §8 Q2)
 
@@ -608,8 +692,7 @@ This pattern has two further properties worth flagging:
 - **Reuses VI's existing algorithm stack.** ES256 / P-256 is the required VI
   signing algorithm per design-rationale §5. Implementations already have the
   JWT + JWKS verification code path for SD-JWT and KB-SD-JWT. No second crypto
-  stack, no new verification library. The reference implementation's JWT is
-  directly consumable by any existing VI JWS verifier.
+  stack, no new verification library.
 - **Subject binding via native `sub` claim.** The JWT's `sub` claim is the
   wallet address, so "this attestation is about this payment source" is a
   native JWT claim check rather than a new constraint field. This is the
@@ -642,13 +725,12 @@ signature.
 The constraint binds the attestation to a specific boolean condition via the
 `conditionHash` array. The security of this binding depends on the issuer's
 condition-hashing function being collision-resistant over the space of
-conditions the issuer accepts. The reference implementation (InsumerAPI)
-computes the condition hash as `"0x" + sha256(canonical_json(evaluated_condition))`,
-where `canonical_json` is `JSON.stringify` with object keys sorted
-lexicographically. Verifiers that need to precompute a condition hash to
-populate `required_condition_hashes` MUST use the same canonicalisation the
-issuer uses; the reference issuer's canonicalisation is documented at
-`https://api.insumermodel.com/openapi.yaml`.
+conditions the issuer accepts. The condition hash values in
+`required_condition_hashes` are opaque to the constraint — the verifier does
+not recompute them; it matches them against the attestation's `conditionHash`
+array. Mandate issuers that need to precompute a condition hash to populate
+`required_condition_hashes` MUST use the same canonicalisation the target
+issuer uses (see §7.1 for the reference issuer's canonicalisation algorithm).
 
 Implementations MUST NOT use a condition hash as a standalone claim (the
 attestation JWT as a whole is what is signed); the hash is a binding field,
@@ -658,21 +740,21 @@ not a bearer credential.
 
 The `iat` age check (Step 8 of §4.2) requires that the verifier's clock is
 reasonably synchronised with the issuer's clock. A clock skew exceeding
-`max_age_seconds` would cause all attestations to be rejected. Implementations
-SHOULD use NTP-synchronised clocks and SHOULD log clock-skew-related failures
-distinctly to aid diagnosis.
+`max_attestation_age` would cause all attestations to be rejected.
+Implementations SHOULD use NTP-synchronised clocks and SHOULD log
+clock-skew-related failures distinctly to aid diagnosis.
 
 ---
 
-## 7. Reference Implementation
+## 7. Reference Implementation: InsumerAPI
 
-### 7.1 InsumerAPI
+### 7.1 Overview
 
 [InsumerAPI](https://api.insumermodel.com) is the reference implementation
-of the wallet-state attestation issuer consumed by this constraint type. It
+of a conformant wallet-state attestation issuer for this constraint type. It
 evaluates boolean conditions against live on-chain state across 33 chains and
-returns ES256-signed JWTs that are directly verifiable using the JWT + JWKS
-pattern specified in §4.
+returns ES256-signed JWTs that conform to the abstract interface defined in
+§4.1.
 
 | Property | Value |
 |----------|-------|
@@ -682,23 +764,65 @@ pattern specified in §4.
 | Agent-native key purchase | `POST /v1/keys/buy` (no auth; wallet is identity; USDC or BTC) |
 | JWKS (RFC 7517) | `GET /.well-known/jwks.json` |
 | OpenAPI spec | `GET /openapi.yaml` |
+| AI agent discovery | `GET /llms.txt` |
 | Signing algorithm | ES256 (RFC 7518) via JOSE (`jose` npm package) |
 | JWT TTL | 1800 seconds (`exp = iat + 1800`) |
-| Condition hash algorithm | `"0x" + sha256(canonical_json(evaluated_condition))`, sorted keys |
-| Supported chains | 33 — all major EVM chains, Solana, XRPL, Bitcoin, and additional chains documented in `/openapi.yaml` |
 | Key curve | P-256 (`alg: ES256`, `kty: EC`, `crv: P-256`, `kid: insumer-attest-v1`) |
+| Supported chains | 33 — all major EVM chains, Solana, XRPL, Bitcoin, and additional chains documented in `/openapi.yaml` |
 
-**Agent-native provisioning.** The reference issuer supports fully
-autonomous key provisioning at `POST /v1/keys/buy`: no email, no signup form,
-no human in the loop. An agent submits an `appName`, a `txHash`, and a
-`chainId`; the endpoint verifies the USDC (or BTC) transfer on-chain,
-dedupes against the sender wallet, and returns a new API key. This is
-structurally aligned with the VI execution model — an agent that has the
-authority to spend USDC on behalf of its principal already has everything
-it needs to provision the key required to fulfill `environment.wallet_state`
-constraints. No out-of-band credential issuance step is required.
+### 7.2 Condition Hash Canonicalization
 
-**Live JWKS** (verified 2026-04-15):
+The reference issuer computes condition hashes as:
+
+```
+conditionHash = "0x" + sha256(canonical_json(evaluated_condition))
+```
+
+where `canonical_json` is `JSON.stringify` with object keys sorted
+lexicographically. The `evaluatedCondition` object contains the normalized
+form of the condition as evaluated (e.g., `{ type, chainId, contractAddress,
+operator, threshold, decimals }` for a `token_balance` condition).
+
+Mandate issuers that need to precompute `required_condition_hashes` for
+constraints targeting InsumerAPI MUST use this same canonicalization. The
+full `evaluatedCondition` schema per condition type is documented in the
+[InsumerAPI OpenAPI spec](https://api.insumermodel.com/openapi.yaml).
+
+Other conformant issuers MAY use a different condition hash algorithm
+provided it is collision-resistant and documented. The constraint's
+`required_condition_hashes` values are opaque to the verification algorithm
+(§4.2 Step 10) — the verifier matches them, it does not recompute them.
+
+### 7.3 Implementation-Specific Response Claims
+
+In addition to the REQUIRED claims defined in §4.1, the reference issuer
+includes the following OPTIONAL claims in every attestation JWT:
+
+| Claim | Type | Description |
+|-------|------|-------------|
+| `results` | array of object | Per-condition evaluation detail: `{ condition, label, type, chainId, met, evaluatedCondition, conditionHash }` per condition. |
+| `blockNumber` | string (hex) | Block number at which the first condition was evaluated (EVM chains). |
+| `blockTimestamp` | string (ISO 8601) | Block timestamp at which the first condition was evaluated. |
+
+These claims provide a chain-anchored audit trail. Verifiers MAY log them for
+audit but MUST NOT use them as a substitute for the `conditionHash` and `pass`
+checks defined in §4.2.
+
+### 7.4 Agent-Native Key Provisioning
+
+The reference issuer supports fully autonomous key provisioning at
+`POST /v1/keys/buy`: no email, no signup form, no human in the loop. An agent
+submits an `appName`, a `txHash`, and a `chainId`; the endpoint verifies the
+USDC (or BTC) transfer on-chain, dedupes against the sender wallet, and
+returns a new API key. This is structurally aligned with the VI execution
+model — an agent that has the authority to spend USDC on behalf of its
+principal already has everything it needs to provision the key required to
+fulfill `environment.wallet_state` constraints. No out-of-band credential
+issuance step is required.
+
+### 7.5 Live JWKS
+
+Verified 2026-04-15:
 
 ```json
 {
@@ -716,7 +840,7 @@ constraints. No out-of-band credential issuance step is required.
 }
 ```
 
-### 7.2 Minimal Constraint Verifier (JavaScript, `jose`)
+### 7.6 Minimal Constraint Verifier (JavaScript, `jose`)
 
 ```javascript
 import { jwtVerify, createRemoteJWKSet } from 'jose';
@@ -729,7 +853,7 @@ async function checkWalletStateConstraint(constraint, now = new Date()) {
     expected_issuer,
     subject_wallet,
     required_condition_hashes,
-    max_age_seconds = 300,
+    max_attestation_age = 300,
     attestation_request_body = {},
   } = constraint;
 
@@ -777,8 +901,8 @@ async function checkWalletStateConstraint(constraint, now = new Date()) {
   // Steps 7–8 — exp (jwtVerify already enforced) and iat age
   const nowUnix = Math.floor(now.getTime() / 1000);
   const ageSeconds = nowUnix - payload.iat;
-  if (ageSeconds > max_age_seconds) {
-    throw new Error(`Attestation age ${ageSeconds}s exceeds max_age_seconds ${max_age_seconds}: fail-closed`);
+  if (ageSeconds > max_attestation_age) {
+    throw new Error(`Attestation age ${ageSeconds}s exceeds max_attestation_age ${max_attestation_age}: fail-closed`);
   }
 
   // Step 9 — pass must be true
@@ -798,7 +922,7 @@ async function checkWalletStateConstraint(constraint, now = new Date()) {
 }
 ```
 
-### 7.3 Fail-Closed Integration Pattern (Python)
+### 7.7 Fail-Closed Integration Pattern (Python)
 
 ```python
 import httpx
@@ -815,7 +939,7 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
     expected_issuer = constraint["expected_issuer"]
     subject_wallet = constraint["subject_wallet"]
     required_condition_hashes = constraint["required_condition_hashes"]
-    max_age_seconds = constraint.get("max_age_seconds", 300)
+    max_attestation_age = constraint.get("max_attestation_age", 300)
     request_body = constraint.get("attestation_request_body", {})
 
     if not attestation_url.startswith("https://") or not trusted_jwks.startswith("https://"):
@@ -856,8 +980,8 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
 
     # Age check
     age = now_unix - int(payload["iat"])
-    if age > max_age_seconds:
-        raise ValueError(f"Attestation age {age}s exceeds max_age_seconds {max_age_seconds}: fail-closed")
+    if age > max_attestation_age:
+        raise ValueError(f"Attestation age {age}s exceeds max_attestation_age {max_attestation_age}: fail-closed")
 
     # pass check
     if payload.get("pass") is not True:
@@ -876,46 +1000,34 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
 
 ## 8. Open Questions
 
-1. **Algorithm negotiation for `environment.*` constraints.** The companion
-   `environment.market_state` draft uses Ed25519 with a custom alphabetically-sorted
-   canonical JSON payload. This draft uses ES256 with standard JWS base64url
-   encoding — the same stack VI already requires for SD-JWT. A minimum-friction
-   answer would be: each `environment.*` constraint type declares its own
-   signing algorithm, verifiers negotiate a supported set, and the
-   constraint-type-level `alg` selection is the point of record. A maximum-
-   unification answer would be: all `environment.*` constraints MUST emit JWS
-   so verifiers need exactly one verification path. Working group input
-   welcome; this draft is intentionally agnostic about the broader family
-   decision and specifies ES256 only for its own type.
-
-2. **Batch attestation.** Should `attestation_url` be permitted to return an
+1. **Batch attestation.** Should `attestation_url` be permitted to return an
    attestation covering multiple subject wallets or multiple condition sets
    in a single JWT, with the constraint identifying a subset via claim path?
    This would reduce round-trips for mandates that gate on multiple payment
    sources. Proposal: defer to a `environment.wallet_state_batch` type rather
    than overloading this one.
 
-3. **On-chain verification.** For fully on-chain execution contexts, the
+2. **On-chain verification.** For fully on-chain execution contexts, the
    JWT verification step could be performed by a smart contract using
    P-256 precompile ([EIP-7212](https://eips.ethereum.org/EIPS/eip-7212)) or
    a verifier contract. Specification of on-chain `attestation_url` semantics
    (including IPFS-based attestation blobs and on-chain oracle bridges) is
    deferred to a companion document.
 
-4. **Condition hash extensibility.** This draft binds the constraint to one
+3. **Condition hash extensibility.** This draft binds the constraint to one
    or more literal condition hashes. A future extension could support a
    constraint-time predicate language (e.g., "the attestation MUST contain a
    hash matching this template") to reduce the need for pre-computed hashes
    in mandate issuance. Deferred to v0.2.
 
-5. **Multi-issuer composition.** Can a single `environment.wallet_state`
+4. **Multi-issuer composition.** Can a single `environment.wallet_state`
    constraint require attestations from two independent issuers
    (e.g., InsumerAPI and a second wallet-state issuer) for defence-in-depth?
    Current answer: compose two separate `environment.wallet_state` constraints
    in the mandate. A shorthand `required_issuers` array could be added in
    v0.2 if there is demand.
 
-6. **Family-wide `subject` binding.** LembaGang's review of this proposal
+5. **Family-wide `subject` binding.** LembaGang's review of this proposal
    raised a generalisation worth recording: every `environment.*` constraint
    type has a natural "subject" — the exchange/session for `market_state`,
    the wallet for `wallet_state`, potentially a counterparty DID or
@@ -935,6 +1047,7 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.2-draft | 2026-04-16 | Revision addressing LembaGang review ([comment 4259989585](https://github.com/agent-intent/verifiable-intent/pull/22#issuecomment-4259989585)). **Provider neutrality**: §4.1 restructured as abstract attestation interface — 7 REQUIRED JWT claims (`iss`, `sub`, `jti`, `iat`, `exp`, `pass`, `conditionHash`) define the normative contract; `results`, `blockNumber`, `blockTimestamp` moved to OPTIONAL; condition hash canonicalization moved to §7.2 as issuer-specific detail. A second conformant implementation needs only the 7 core claims and a JWKS. **Attestation freshness**: `max_age_seconds` renamed to `max_attestation_age`, elevated to REQUIRED with normative default of 300, new §4.6 documents TOCTOU rationale and family-wide semantics. **Algorithm agility**: new §4.7 resolves former Q1 — family-level agility per RFC 8725 §3.1, per-type MUST-implement algorithm (ES256 for wallet_state, Ed25519 for market_state), SHOULD/MAY extension sets, drafted as standalone block for adoption in PR #9. Former Q1 (algorithm negotiation) removed from §8 and resolved in §4.7. Former Q6 (family-wide subject binding) renumbered to Q5. InsumerAPI-specific content (§6.1 JWKS URLs, §6.6 canonicalization detail) consolidated in §7. §7 restructured with subsections: §7.1 overview, §7.2 canonicalization, §7.3 implementation-specific claims, §7.4 agent-native provisioning, §7.5 live JWKS, §7.6–7.7 reference verifiers. |
 | 0.1-draft | 2026-04-15 | Initial draft. `environment.wallet_state` constraint type. ES256 JWT + JWKS attestation verification. Fail-closed algorithm. InsumerAPI as reference implementation. Proposed for registration in VI constraint type registry. Answers companion §8 Q2 (trusted_issuers) via JWKS-host allowlisting. |
 
 ---
@@ -942,8 +1055,8 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
 ## Appendix A: Attestation Test Vectors
 
 These test vectors allow constraint verifier implementors to validate their
-attestation verification logic against a known-good signed receipt from
-InsumerAPI.
+attestation verification logic against a known-good signed receipt from the
+reference implementation (InsumerAPI, §7).
 
 **Request** (POST `https://api.insumermodel.com/v1/attest`):
 
@@ -1011,7 +1124,7 @@ it against the JWKS above using any standard JOSE library. Human developers
 can get a free-tier key in ~10 seconds at
 [`https://insumermodel.com/developers/`](https://insumermodel.com/developers/);
 autonomous agents can self-provision via `POST /v1/keys/buy` using an
-on-chain USDC or BTC payment (see §7.1). A working end-to-end verifier is
+on-chain USDC or BTC payment (see §7.4). A working end-to-end verifier is
 published at
 [`github.com/douglasborthwick-crypto/insumer-examples`](https://github.com/douglasborthwick-crypto/insumer-examples).
 
@@ -1033,7 +1146,7 @@ published at
 | `iss` mismatch | 6 | `"JWT iss does not match expected_issuer: fail-closed"` | Do not proceed |
 | `sub` mismatch | 6 | `"JWT sub does not match subject_wallet: fail-closed"` | Do not proceed |
 | `exp` in past | 7 | `"Attestation has expired (exp in past): fail-closed"` | Re-fetch; if re-fetch fails, do not proceed |
-| `iat` age > `max_age_seconds` | 8 | `"Attestation age Ns exceeds max_age_seconds M: fail-closed"` | Re-fetch; if re-fetch fails, do not proceed |
+| `iat` age > `max_attestation_age` | 8 | `"Attestation age Ns exceeds max_attestation_age M: fail-closed"` | Re-fetch; if re-fetch fails, do not proceed |
 | `pass` is `false` | 9 | `"Attestation pass is not true: constraint not satisfied"` | Do not proceed; wallet state has changed |
 | Required condition hash missing | 10 | `"Required condition hash {hash} not in attestation: constraint not satisfied"` | Do not proceed; log reason |
 
