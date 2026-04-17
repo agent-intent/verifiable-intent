@@ -781,6 +781,64 @@ reasonably synchronised with the issuer's clock. A clock skew exceeding
 Implementations SHOULD use NTP-synchronised clocks and SHOULD log
 clock-skew-related failures distinctly to aid diagnosis.
 
+### 6.8 JWKS Caching and Key Rotation
+
+The `trusted_jwks` URL is the trust root for attestation verification
+(§6.3). Naive implementations that re-fetch the JWKS on every verification
+create avoidable load on the issuer and expose verifiers to failure modes
+(rate limits, transient network errors) that are not failures of the
+attestation itself. This section defines the conforming caching and
+rotation behaviour.
+
+**Caching permissibility.** Verifiers MAY cache the JWKS fetched from
+`trusted_jwks`. Verifiers SHOULD respect the issuer's `Cache-Control`
+directive when present. When `Cache-Control` is absent, verifier-side TTL
+is implementation-defined, subject to the kid-mismatch rule below.
+
+**Kid-mismatch as cache bust.** When the verifier encounters an
+attestation whose `kid` is not present in the cached JWKS, the verifier
+MUST bypass the cache and fetch the JWKS fresh before rejecting the
+attestation. This ensures attestations signed during a key-rotation window
+are verifiable as soon as the new key is published, without waiting for
+the cache TTL to elapse.
+
+**Issuer rotation responsibilities.** Issuers rotating a signing key
+SHOULD publish both the old and new keys in the JWKS simultaneously during
+a grace window. The grace window SHOULD exceed both:
+
+- The maximum attestation lifetime the issuer will sign with the old kid
+  after starting rotation.
+- The verifier JWKS cache TTL the issuer publishes via HTTP `Cache-Control`.
+
+During the grace window, attestations signed with either kid MUST verify
+against their corresponding key entry. After the grace window elapses, the
+issuer MAY remove the old key entry. Verifiers holding a stale cache
+containing only the old key will fetch fresh and observe the transition on
+the next mismatched kid, or at cache expiry, whichever comes first.
+
+**Fail-closed on fetch failure.** If JWKS fetch fails (network error,
+non-2xx response, malformed JSON) and no usable cache is available, the
+constraint evaluation MUST produce a violation entry. Verifiers MUST NOT
+fall back to a hard-coded public key as a recovery path — the JWKS URL is
+the trust root, and silent fallback undermines the §6.3 binding. A cached
+JWKS whose TTL has expired MAY be used as a last-resort fallback when the
+fresh fetch fails, provided the deployment's security policy explicitly
+permits stale-cache fallback. Deployments with strict freshness
+requirements (e.g., payment execution) SHOULD NOT enable stale-cache
+fallback.
+
+**Per-constraint scope.** JWKS fetch failures are per-constraint. A fetch
+failure on one `environment.wallet_state` constraint MUST NOT short-circuit
+evaluation of other `environment.*` constraints in the mandate; each
+constraint produces its own violation entry independently. This scoping
+preserves the diagnostic signal needed for dispute resolution even when a
+single issuer endpoint is unreachable.
+
+**Interaction with §6.2 replay cache.** The `jti` dedup cache and the
+JWKS cache are independent. The `jti` cache TTL is bound by
+`max_attestation_age + 30s`; the JWKS cache TTL is bound by issuer cache
+directives. No cross-dependency.
+
 ---
 
 ## 7. Reference Implementation: InsumerAPI
