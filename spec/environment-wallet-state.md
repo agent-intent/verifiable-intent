@@ -238,7 +238,8 @@ agent MUST NOT proceed on uncertainty.
 | `expected_issuer` | string | Yes | The JWT `iss` claim value the verifier MUST require. The verifier MUST reject attestations whose `iss` differs from this value. |
 | `subject_wallet` | string | Yes | The wallet address that MUST appear in the JWT `sub` claim. Binds the attestation to a specific payment source. |
 | `required_condition_hashes` | array of string | Yes | One or more condition hashes (hex strings) the JWT `conditionHash` array MUST contain. Every value in this list MUST be present in the attestation's `conditionHash` array. Extra hashes in the attestation are permitted. |
-| `max_attestation_age` | integer | Yes | Maximum age in seconds of the attestation, measured from JWT `iat` to the time of verification. MUST be a positive integer. Verifiers MUST reject attestations where `(now − iat) > max_attestation_age`, even if `exp` has not yet passed. When absent for backwards compatibility with v0.1, verifiers MUST apply a default of `300`. Mandate issuers SHOULD always include this field explicitly. See §4.6 for rationale. |
+| `max_attestation_age` | integer | Yes | Maximum age in seconds of the attestation, measured from JWT `iat` to the time of verification. MUST be a positive integer. Verifiers MUST reject attestations where `(now − iat) > max_attestation_age`, even if `exp` has not yet passed. A well-formed constraint MUST include this field; a missing `max_attestation_age` is a malformed constraint and verifiers MUST reject it (see §4.2 Step 1). There is no default value. See §4.6 for rationale. |
+| `stale_cache_fallback_permitted` | boolean | No | Whether verifiers MAY use an expired JWKS cache as a last-resort fallback when fresh JWKS fetch fails. Verifiers MUST apply a default of `false` when absent. Deployments with strict freshness requirements (e.g., payment execution) MUST NOT set this to `true`. See §6.8 for companion verifier behaviour on fetch failure. |
 | `attestation_request_body` | object | No | Optional POST body the verifier sends to `attestation_url` when fetching a fresh attestation. Verifiers MUST NOT trust this body to alter the expected claims — all binding is enforced by `expected_kid`, `expected_issuer`, `subject_wallet`, and `required_condition_hashes`. |
 
 #### Field Constraints
@@ -255,8 +256,17 @@ agent MUST NOT proceed on uncertainty.
   MUST be rejected as malformed (a wallet-state constraint with no conditions
   to match is meaningless).
 - `max_attestation_age` MUST be a positive integer (`>= 1`). Values less than
-  `1` MUST be rejected as malformed. When absent, verifiers MUST apply a
-  default of `300` seconds.
+  `1` MUST be rejected as malformed. A missing `max_attestation_age` field is a
+  malformed constraint and verifiers MUST reject such constraints per §4.2
+  Step 1. There is no default value; all mandate issuers MUST declare an
+  explicit TOCTOU window for each `environment.wallet_state` constraint. The
+  freshness window is the primary exploitable surface (§4.6); silent defaults
+  leave that surface undefined at the deployment boundary.
+- `stale_cache_fallback_permitted`, if present, MUST be a strict boolean.
+  Non-boolean values (including string `"false"`, `null`, or numeric) MUST be
+  rejected as malformed per §4.2 Step 1. When absent, verifiers MUST apply a
+  default of `false`; see §6.8 for the companion verifier behaviour on JWKS
+  fetch failure.
 
 ### 4.1 Abstract Attestation Interface
 
@@ -341,9 +351,13 @@ function check_environment_wallet_state(C, now):
         return violation("subject_wallet must be non-empty")
     if length(C.required_condition_hashes) == 0:
         return violation("required_condition_hashes must be non-empty")
-    let max_age = C.max_attestation_age ?? 300
+    if C.max_attestation_age is absent:
+        return violation("max_attestation_age is REQUIRED; constraint is malformed: fail-closed")
+    let max_age = C.max_attestation_age
     if max_age < 1:
         return violation("max_attestation_age must be >= 1")
+    if C.stale_cache_fallback_permitted is present and not boolean:
+        return violation("stale_cache_fallback_permitted must be boolean if present: fail-closed")
 
     # Step 2 — Fetch attestation (timeout: 4 seconds)
     let body = C.attestation_request_body ?? {}
@@ -716,6 +730,16 @@ This pattern has two further properties worth flagging:
 As with `environment.market_state`, verifiers MUST verify the Layer 2
 credential signature chain before trusting any field in any constraint object.
 
+**JWKS URL migration.** The `trusted_jwks` URL is a signed L2 constraint
+field. Issuers migrating to a new JWKS URL cannot be followed by existing
+mandates — migration is a new-mandate event. The migration path is: issuer
+publishes a new JWKS at the new URL; mandate issuers emit new mandates
+targeting the new URL; existing mandates with the old URL expire naturally
+via `exp`. This is a deliberate design choice that binds trust-root identity
+into the signed constraint rather than into a mutable issuer-side pointer.
+The cost is that URL migration is not free; the benefit is that the trust
+root cannot be silently relocated.
+
 ### 6.4 SSRF via attestation_url and trusted_jwks
 
 Both `attestation_url` and `trusted_jwks` are mandate-controlled URLs that
@@ -732,7 +756,10 @@ An attacker removing an `environment.wallet_state` constraint from a Layer 2
 mandate would expand the agent's authority to execute against any wallet
 state. This attack is prevented by the KB-SD-JWT+KB signature on Layer 2 —
 any removal of constraints from the mandate payload invalidates the user's
-signature.
+signature. Verifiers MUST reject any mandate whose Layer 2 signature does not
+validate over the full constraint list as presented; implementations MUST NOT
+accept mandates where the verified signature covers only a subset of the
+declared constraints.
 
 ### 6.6 Condition Hash Collision Assumptions
 
@@ -793,16 +820,26 @@ issuer MAY remove the old key entry. Verifiers holding a stale cache
 containing only the old key will fetch fresh and observe the transition on
 the next mismatched kid, or at cache expiry, whichever comes first.
 
+**Grace-window discoverability.** Issuers SHOULD publish rotation-start
+and grace-window-end timestamps through an auditable channel. The channel
+MAY be out-of-band (release notes, status page, signed rotation
+announcement) or in-band via a JWKS top-level metadata field (e.g.,
+`rotation_announcement: { rotation_started_at, previous_kid, new_kid,
+grace_window_end }`). This specification does not mandate a mechanism; the
+SHOULD is on discoverability, not form. If the working group converges on
+a canonical in-band mechanism, a future revision can elevate it to
+REQUIRED.
+
 **Fail-closed on fetch failure.** If JWKS fetch fails (network error,
 non-2xx response, malformed JSON) and no usable cache is available, the
 constraint evaluation MUST produce a violation entry. Verifiers MUST NOT
 fall back to a hard-coded public key as a recovery path — the JWKS URL is
-the trust root, and silent fallback undermines the §6.3 binding. A cached
-JWKS whose TTL has expired MAY be used as a last-resort fallback when the
-fresh fetch fails, provided the deployment's security policy explicitly
-permits stale-cache fallback. Deployments with strict freshness
-requirements (e.g., payment execution) SHOULD NOT enable stale-cache
-fallback.
+the trust root, and silent fallback undermines the §6.3 binding. When
+`stale_cache_fallback_permitted` is `true`, verifiers MAY use an expired
+cache as a last-resort fallback on fresh-fetch failure; when `false` (the
+default when the field is absent), verifiers MUST produce a violation. For
+mandates where strict freshness is required (e.g., payment execution), the
+field MUST NOT be set to `true` (see §4 Field Constraints).
 
 **Per-constraint scope.** JWKS fetch failures are per-constraint. A fetch
 failure on one `environment.wallet_state` constraint MUST NOT short-circuit
@@ -925,9 +962,13 @@ async function checkWalletStateConstraint(constraint, now = new Date()) {
     expected_issuer,
     subject_wallet,
     required_condition_hashes,
-    max_attestation_age = 300,
+    max_attestation_age,
     attestation_request_body = {},
   } = constraint;
+
+  if (max_attestation_age === undefined) {
+    throw new Error('max_attestation_age is REQUIRED; constraint is malformed: fail-closed');
+  }
 
   // Step 1 — Structural validation
   if (!attestation_url.startsWith('https://') || !trusted_jwks.startsWith('https://')) {
@@ -1011,7 +1052,9 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
     expected_issuer = constraint["expected_issuer"]
     subject_wallet = constraint["subject_wallet"]
     required_condition_hashes = constraint["required_condition_hashes"]
-    max_attestation_age = constraint.get("max_attestation_age", 300)
+    if "max_attestation_age" not in constraint:
+        raise ValueError("max_attestation_age is REQUIRED; constraint is malformed: fail-closed")
+    max_attestation_age = constraint["max_attestation_age"]
     request_body = constraint.get("attestation_request_body", {})
 
     if not attestation_url.startswith("https://") or not trusted_jwks.startswith("https://"):
@@ -1119,6 +1162,7 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.4-draft | 2026-04-18 | Coordinated v0.4 release with [PR #9 `environment.market_state`](https://github.com/agent-intent/verifiable-intent/pull/9) as a single-commit-on-both-specs bundle per LembaGang's (b) proposal ([accepted](https://github.com/agent-intent/verifiable-intent/pull/22#issuecomment-4274334595) by Doug, [locked](https://github.com/agent-intent/verifiable-intent/pull/22#issuecomment-4274435668) by LembaGang). Bundles six items. **Audit-parity port from PR #9 v0.3.2** (commit [`57fd7b6`](https://github.com/agent-intent/verifiable-intent/commit/57fd7b6), LembaGang, Headless Oracle). (1) **`max_attestation_age` strictness** — removed absent-case default of 300 seconds from the §4 schema row, the §4 Field Constraints bullet, the §4.2 pseudocode (Step 1), and both JS (§7.6) and Python (§7.7) reference implementations. Missing `max_attestation_age` is now uniformly malformed; verifiers MUST reject per §4.2 Step 1. Closes the v0.2 REQUIRED-elevation-with-retained-default contradiction. (2) **§6.5 Constraint Stripping** — added normative sentences requiring verifiers to reject mandates whose Layer 2 signature does not validate over the full constraint list, and prohibiting acceptance of subset-signed mandates. **Three consumer-policy additions** (Doug's [Apr 18 17:42 proposal](https://github.com/agent-intent/verifiable-intent/pull/22#issuecomment-4274241447), LembaGang-approved). (3) new `stale_cache_fallback_permitted` **OPTIONAL** boolean field (default `false`) — new §4 schema row + Field Constraints bullet (with boolean-type hygiene clause) + §4.2 Step 1 type-check; companion paragraph in §6.8 replacing the stale-cache sentences in the "Fail-closed on fetch failure" paragraph; payment-execution mandates MUST NOT set `true`. Shape follows the v0.3.2 rule-narrowing: REQUIRED remains the right pattern where no nontrivial default is safe across deployment classes (`max_attestation_age`); OPTIONAL-with-default is the right pattern where a single default is correct for almost all deployments (`stale_cache_fallback_permitted`). Parallel-construction Field Constraints bullet matches the `max_attestation_age` pattern. (4) **§6.8 grace-window discoverability** — issuers SHOULD publish rotation-start and grace-window-end timestamps through an auditable channel (out-of-band OR in-band `rotation_announcement` metadata); SHOULD is on discoverability, not form. (5) **§6.3 JWKS URL migration** — added paragraph documenting `trusted_jwks` URL change as a new-mandate event by design; trust-root rigidity is a deliberate cost/benefit (cannot be silently relocated, at the cost of non-free URL migration). (6) **SHALL→MUST normalization: not needed** — post-audit verification on both specs shows all SHALL references sit in the RFC 2119 Notational Conventions boilerplate; zero substantive usage elsewhere (LembaGang's P3 finding withdrawn on PR #9, symmetric on #22). No architectural changes; no family-wide changes; no InsumerAPI-side code changes required. Co-drafted with LembaGang (Headless Oracle) over PRs #9 and #22; §6.8 lift onto PR #9 v0.4 per agreed sequencing. |
 | 0.3.1-draft | 2026-04-18 | Mirrors PR #9 v0.3 §5.5 Family Composition (commit [`7a8987c`](https://github.com/agent-intent/verifiable-intent/pull/9/commits/7a8987cc34752d6f7f97bb645d67cfaf129e1cda), LembaGang, Headless Oracle) into `environment.wallet_state`. Two refinements surfaced in [PR #22 discussion](https://github.com/agent-intent/verifiable-intent/pull/22) folded into §5.5. **Gap 1 (completeness rule)**: verifiers MUST evaluate every `environment.*` constraint in the mandate to completion before refusing Layer 3; short-circuit evaluation is non-conforming; transactional-constraint evaluation after a confirmed `environment.*` failure remains implementation-defined. Composes with §5.2 ordering. **Gap 2 (per-member disambiguation)**: every violation entry carries both an array-index machine identifier and a per-type human-readable identifier (`subject_wallet` for `environment.wallet_state`, MIC for `environment.market_state`); driving case is multiple same-type constraints in a single mandate. **Rationale** presents semantic and architectural arguments as co-equal — conjunction as a family membership criterion, not a per-type design decision. No changes elsewhere in the spec; §4.1, §4.5, §4.7, §5.2, §6.*, §7.* untouched; no InsumerAPI-side code changes required. |
 | 0.3-draft | 2026-04-17 | Addresses the first of the four held-back follow-ups from [LembaGang comment 4260672256](https://github.com/agent-intent/verifiable-intent/pull/22#issuecomment-4260672256): **composition semantics on mixed pass/fail**. New §5.5 Family Composition — conjunction semantics, named answer for the mixed pass/fail case (one `environment.*` passes, another fails → family gate fails), L3 execution gate as explicit normative rule, per-member diagnostic output requirement. §5.2 and all other sections unchanged. Drafted as standalone block adoptable verbatim in `environment.market_state` §5.5 with no changes — same pattern as §4.7. |
 | 0.2-draft | 2026-04-16 | Revision addressing LembaGang review ([comment 4259989585](https://github.com/agent-intent/verifiable-intent/pull/22#issuecomment-4259989585)). **Provider neutrality**: §4.1 restructured as abstract attestation interface — 7 REQUIRED JWT claims (`iss`, `sub`, `jti`, `iat`, `exp`, `pass`, `conditionHash`) define the normative contract; `results`, `blockNumber`, `blockTimestamp` moved to OPTIONAL; condition hash canonicalization moved to §7.2 as issuer-specific detail. A second conformant implementation needs only the 7 core claims and a JWKS. **Attestation freshness**: `max_age_seconds` renamed to `max_attestation_age`, elevated to REQUIRED with normative default of 300, new §4.6 documents TOCTOU rationale and family-wide semantics. **Algorithm agility**: new §4.7 resolves former Q1 — family-level agility per RFC 8725 §3.1, per-type MUST-implement algorithm (ES256 for wallet_state, Ed25519 for market_state), SHOULD/MAY extension sets, drafted as standalone block for adoption in PR #9. Former Q1 (algorithm negotiation) removed from §8 and resolved in §4.7. Former Q6 (family-wide subject binding) renumbered to Q5. InsumerAPI-specific content (§6.1 JWKS URLs, §6.6 canonicalization detail) consolidated in §7. §7 restructured with subsections: §7.1 overview, §7.2 canonicalization, §7.3 implementation-specific claims, §7.4 agent-native provisioning, §7.5 live JWKS, §7.6–7.7 reference verifiers. |
