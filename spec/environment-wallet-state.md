@@ -641,40 +641,17 @@ evaluated `environment.wallet_state` constraint:
 
 ### 5.5 Family Composition
 
-**Conjunction semantics.** The `environment.*` family is a conjunction: a
-mandate satisfies the family's gate if and only if every `environment.*`
-constraint in the mandate passes. There is no partial-fulfillment path within
-the family.
+**Conjunction semantics.** The `environment.*` family is a conjunction: a mandate satisfies the family's gate if and only if every `environment.*` constraint in the mandate passes. There is no partial-fulfillment path within the family.
 
-**Mixed pass/fail.** When one `environment.*` constraint passes and another
-fails in the same mandate — for example, `environment.market_state` returns
-`OPEN` while `environment.wallet_state` returns `pass: false` — the family's
-gate fails. The passing member does not rescue the failing member.
+**Mixed pass/fail.** When one `environment.*` constraint passes and another fails in the same mandate — for example, `environment.wallet_state` returns `pass: true` for a primary settlement wallet while a second `environment.wallet_state` returns `pass: false` for a gas wallet, or `environment.wallet_state` returns `pass: true` while `environment.market_state` returns `CLOSED` — the family's gate fails. The passing member does not rescue the failing member.
 
-**L3 execution gate.** A verifier or agent MUST NOT proceed to Layer 3
-creation if the validation result contains any `environment.*` entry in
-`violations`, regardless of whether all transactional constraints
-(`mandate.*`, `payment.*`) also pass. Environment constraints gate execution;
-they are not co-equal with transactional constraints.
+**L3 execution gate and completeness.** Verifiers MUST evaluate every `environment.*` constraint in the mandate to completion before refusing Layer 3, even after the first failure has been observed. The `violations` list MUST contain one entry per failed `environment.*` constraint regardless of which member failed first. Short-circuit evaluation of `environment.*` constraints is non-conforming because it denies downstream consumers the per-member evidence the gate depends on. Transactional constraint evaluation (`mandate.*`, `payment.*`) after a confirmed `environment.*` failure remains implementation-defined (verifiers MAY evaluate for diagnostic completeness, MAY skip for efficiency) as long as L3 refusal is unambiguous. This composes with §5.2's ordering requirement — environment-before-transactional stays; the completeness rule layers on top.
 
-**Per-member diagnostic output.** Each failed `environment.*` constraint MUST
-produce its own entry in the `violations` list, naming the constraint type
-and the §4.2 step that failed. Verifiers MUST NOT collapse multiple
-`environment.*` failures into a single generic violation. This preserves the
-diagnostic signal needed for post-hoc analysis and dispute resolution.
+**Per-member diagnostic output.** Each failed `environment.*` constraint MUST produce its own entry in the `violations` list. Each violation entry MUST carry two identifiers: the array index of the constraint in the mandate's `constraints[]` array as the primary machine identifier (unambiguous across any combination of constraint types and repeats), and a human-readable identifier derived from the constraint's distinguishing field. Selection of the distinguishing field is a per-type obligation declared by each constraint type specification, analogous to the per-type declaration of MUST-implement algorithms in §4.7. For `environment.wallet_state`, the distinguishing field is `subject_wallet` — REQUIRED per §4 schema, always present, no fallback needed. For `environment.market_state`, the distinguishing field is the MIC, taken from the signed attestation's `mic` field when present per companion §4.1, falling back to the constraint's attestation-URL parse. Verifiers MUST NOT collapse multiple `environment.*` failures into a single generic violation. This preserves the diagnostic signal needed for post-hoc analysis and dispute resolution, and disambiguates cases where multiple constraints of the same type appear in a single mandate — for `environment.wallet_state`, the driving case is multiple wallet-state constraints in a single mandate with different `subject_wallet` values (e.g., a settlement wallet and a separate gas wallet, both of which must satisfy their own condition hashes before L3).
 
-**Rationale.** Each member of the family answers an independent question —
-is this market open? is this wallet still funded? Because the questions are
-independent, their answers compose as AND, not OR: a failure on any member
-removes the basis for execution. Collapsing per-member diagnostics would
-destroy the audit trail that makes the family load-bearing; preserving them
-makes every signed attestation recoverable from the validation output, and
-makes dispute resolution an application-layer concern with complete evidence
-rather than a debugging exercise.
+**Rationale.** Two arguments, co-equal, reinforcing. The semantic argument: each member of the family answers an independent question — is this wallet still funded? is this market open? Because the questions are independent, their answers compose as AND, not OR: a failure on any member removes the basis for execution. The architectural argument: conjunction also falls out of fail-closed posture directly. Any `environment.*` type whose failure mode is OR-tolerable is, by definition, outside the family's design charter — if a constraint's failure is survivable, it is not gating execution, and if it is not gating execution, it is not in the family. This matters forward. When `environment.regulatory_status`, `environment.counterparty_credit`, or any other future `environment.*` type is proposed, conjunction is not a design decision to re-litigate per type; it is a membership criterion. The per-member diagnostic requirement follows from the same logic: collapsing per-member diagnostics would destroy the audit trail that makes the family load-bearing. Preserving them makes every signed attestation recoverable from the validation output, and makes dispute resolution an application-layer concern with complete evidence rather than a debugging exercise.
 
-> **Note on family coordination**: Drafted as a standalone block adoptable
-> verbatim in `environment.market_state` §5.5 with no changes. Same pattern
-> as §4.7 — one family-wide question, one answer, two specs.
+> **Note on family coordination**: Mirrors `environment.market_state` §5.5 at commit [`7a8987c`](https://github.com/agent-intent/verifiable-intent/pull/9/commits/7a8987cc34752d6f7f97bb645d67cfaf129e1cda) with the per-type distinguishing-field row swapped. Same pattern as §4.7 — one family-wide question, one answer, two specs.
 
 ---
 
@@ -1142,6 +1119,7 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.3.1-draft | 2026-04-18 | Mirrors PR #9 v0.3 §5.5 Family Composition (commit [`7a8987c`](https://github.com/agent-intent/verifiable-intent/pull/9/commits/7a8987cc34752d6f7f97bb645d67cfaf129e1cda), LembaGang, Headless Oracle) into `environment.wallet_state`. Two refinements surfaced in [PR #22 discussion](https://github.com/agent-intent/verifiable-intent/pull/22) folded into §5.5. **Gap 1 (completeness rule)**: verifiers MUST evaluate every `environment.*` constraint in the mandate to completion before refusing Layer 3; short-circuit evaluation is non-conforming; transactional-constraint evaluation after a confirmed `environment.*` failure remains implementation-defined. Composes with §5.2 ordering. **Gap 2 (per-member disambiguation)**: every violation entry carries both an array-index machine identifier and a per-type human-readable identifier (`subject_wallet` for `environment.wallet_state`, MIC for `environment.market_state`); driving case is multiple same-type constraints in a single mandate. **Rationale** presents semantic and architectural arguments as co-equal — conjunction as a family membership criterion, not a per-type design decision. No changes elsewhere in the spec; §4.1, §4.5, §4.7, §5.2, §6.*, §7.* untouched; no InsumerAPI-side code changes required. |
 | 0.3-draft | 2026-04-17 | Addresses the first of the four held-back follow-ups from [LembaGang comment 4260672256](https://github.com/agent-intent/verifiable-intent/pull/22#issuecomment-4260672256): **composition semantics on mixed pass/fail**. New §5.5 Family Composition — conjunction semantics, named answer for the mixed pass/fail case (one `environment.*` passes, another fails → family gate fails), L3 execution gate as explicit normative rule, per-member diagnostic output requirement. §5.2 and all other sections unchanged. Drafted as standalone block adoptable verbatim in `environment.market_state` §5.5 with no changes — same pattern as §4.7. |
 | 0.2-draft | 2026-04-16 | Revision addressing LembaGang review ([comment 4259989585](https://github.com/agent-intent/verifiable-intent/pull/22#issuecomment-4259989585)). **Provider neutrality**: §4.1 restructured as abstract attestation interface — 7 REQUIRED JWT claims (`iss`, `sub`, `jti`, `iat`, `exp`, `pass`, `conditionHash`) define the normative contract; `results`, `blockNumber`, `blockTimestamp` moved to OPTIONAL; condition hash canonicalization moved to §7.2 as issuer-specific detail. A second conformant implementation needs only the 7 core claims and a JWKS. **Attestation freshness**: `max_age_seconds` renamed to `max_attestation_age`, elevated to REQUIRED with normative default of 300, new §4.6 documents TOCTOU rationale and family-wide semantics. **Algorithm agility**: new §4.7 resolves former Q1 — family-level agility per RFC 8725 §3.1, per-type MUST-implement algorithm (ES256 for wallet_state, Ed25519 for market_state), SHOULD/MAY extension sets, drafted as standalone block for adoption in PR #9. Former Q1 (algorithm negotiation) removed from §8 and resolved in §4.7. Former Q6 (family-wide subject binding) renumbered to Q5. InsumerAPI-specific content (§6.1 JWKS URLs, §6.6 canonicalization detail) consolidated in §7. §7 restructured with subsections: §7.1 overview, §7.2 canonicalization, §7.3 implementation-specific claims, §7.4 agent-native provisioning, §7.5 live JWKS, §7.6–7.7 reference verifiers. |
 | 0.1-draft | 2026-04-15 | Initial draft. `environment.wallet_state` constraint type. ES256 JWT + JWKS attestation verification. Fail-closed algorithm. InsumerAPI as reference implementation. Proposed for registration in VI constraint type registry. Answers companion §8 Q2 (trusted_issuers) via JWKS-host allowlisting. |
