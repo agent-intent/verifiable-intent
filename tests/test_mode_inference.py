@@ -254,6 +254,7 @@ def test_mixed_mode_vcts_rejected():
         "aud": "https://www.agent.com",
         "iat": now,
         "sd_hash": hash_bytes(l1_ser.encode("ascii")),
+        "_sd_alg": "sha-256",
         "delegate_payload": [
             {"...": hash_disclosure(open_disc)},
             {"...": hash_disclosure(final_disc)},
