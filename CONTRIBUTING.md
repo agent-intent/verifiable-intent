@@ -70,8 +70,14 @@ or OpenAPI spec where available.
 git clone https://github.com/agent-intent/verifiable-intent.git
 cd verifiable-intent
 
+# Recommended: upgrade pip for pyproject/hatchling editable installs
+python -m pip install --upgrade pip
+
 # Install with dev dependencies (includes pytest)
 pip install -e ".[dev]"
+
+# Fallback if editable install is not supported in your environment:
+# pip install ".[dev]"
 
 # Run the test suite
 pytest
