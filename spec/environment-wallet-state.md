@@ -1,9 +1,9 @@
 # Verifiable Intent — Wallet State Attestation Constraint Proposal
 
 **Type identifier**: `environment.wallet_state`
-**Version**: 0.6-draft
+**Version**: 0.6.5-draft
 **Status**: Draft / Proposed for Registration
-**Date**: 2026-04-20
+**Date**: 2026-05-06
 **Author**: Douglas Borthwick (InsumerAPI)
 **License**: Apache 2.0
 
