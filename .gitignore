@@ -14,3 +14,4 @@ CLAUDE.md
 uv.lock
 site/
 int/
+.claude/
