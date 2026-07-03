@@ -39,7 +39,8 @@ for this purpose.
   `fix: correct cart hash binding in autonomous mode`). Individual commit
   messages within a PR are not required to follow this format.
 - **Tests**: All code changes should include tests or demonstrate no regression
-  against the existing test suite. Run `pytest` from the repo root to verify.
+  against the existing test suite. Run `pytest` from the `python/` directory to
+  verify.
 - **DCO sign-off**: Every commit must include a `Signed-off-by` line.
 
 ### Specification Changes
@@ -68,7 +69,7 @@ or OpenAPI spec where available.
 ```bash
 # Clone the repo
 git clone https://github.com/agent-intent/verifiable-intent.git
-cd verifiable-intent
+cd verifiable-intent/python
 
 # Install with dev dependencies (includes pytest)
 pip install -e ".[dev]"

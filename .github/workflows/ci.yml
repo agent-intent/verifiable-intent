@@ -9,6 +9,9 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +31,9 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: python
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
