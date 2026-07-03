@@ -6,10 +6,14 @@ terms; this document maps terminology for implementers working with a specific
 protocol.
 
 > **Protocol versions**: Based on the Universal Commerce Protocol (UCP) specification
-> as of 23 January 2026, the Agent Payments Protocol (AP2) specification as of
-> 16 September 2025, and the Agentic Commerce Protocol (ACP) specification as of
+> as of 23 January 2026, the Agent Payments Protocol (AP2) version 0.2.0 ("V2",
+> 28 April 2026), and the Agentic Commerce Protocol (ACP) specification as of
 > 30 January 2026. Mappings reflect these versions; "no equivalent" statements are
-> bounded by these dates.
+> bounded by these dates. AP2 V2 introduced the Human-Not-Present model with Open
+> Checkout/Open Payment Mandates, SD-JWT disclosures, and `cnf`-based agent key
+> binding — natively defining much of the delegation mechanism VI was positioned
+> to fill. Rows below that still read "no equivalent" against pre-V2 AP2 are
+> bounded by the noted date and may now have an AP2 V2 analogue.
 
 **How to read the tables:** Each row starts with the canonical VI term as
 defined in [`spec/README.md`](../spec/README.md). The definition column
@@ -40,7 +44,7 @@ differences.
 |---------|-----------|----------------------|----------------|-------|
 | **Layer 1 (L1)** | Credential Provider SD-JWT binding user identity to a public key via `cnf.jwk`. Long-lived (~1 year) | --- | --- | No equivalent in any protocol. AP2 assumes identity binding happens outside the VDC framework. ACP has no identity credential layer. L1 is a VI-specific contribution |
 | **Layer 2 (L2), Immediate** | User KB-SD-JWT with finalized checkout and payment mandates (`vct: "mandate.checkout.1"`, `vct: "mandate.payment.1"`). No `cnf` in mandates (no further delegation). Human present | Checkout mandate / `ap2.checkout_mandate` (UCP) / Cart Mandate VDC (AP2) | Checkout session at `ready_for_payment` | UCP's checkout mandate extension wraps AP2 Cart Mandates in UCP checkout sessions. AP2 Cart Mandate bundles cart details + payment request + merchant signature. ACP maps to the checkout session reaching `ready_for_payment`, where the buyer confirms final values before CompleteCheckout. VI L2 Immediate separates checkout and payment into distinct selectively-disclosable mandates |
-| **Layer 2 (L2), Autonomous** | User KB-SD-JWT with constraint-bearing mandates (`vct: "mandate.checkout.open.1"`, `vct: "mandate.payment.open.1"`) and `cnf.jwk` binding the agent's key. Human not present | Pre-checkout delegation (UCP) / Intent Mandate VDC (AP2) | --- | UCP has no formal pre-checkout delegation credential but the concept maps to agent actions before checkout creation. AP2 Intent Mandate carries natural language description + merchant/SKU lists. No ACP equivalent; the agent creates and completes checkout sessions without a prior constraint credential. VI L2 Autonomous carries typed constraints (quantitative constraints are machine-enforceable; qualitative constraints are informational) |
+| **Layer 2 (L2), Autonomous** | User KB-SD-JWT with constraint-bearing mandates (`vct: "mandate.checkout.open.1"`, `vct: "mandate.payment.open.1"`) and `cnf.jwk` binding the agent's key. Human not present | Pre-checkout delegation (UCP) / Open Checkout + Open Payment Mandate (AP2 V2) | --- | AP2 V2's **Open Checkout Mandate** + **Open Payment Mandate** are the structural twin of VI L2 Autonomous: same VCT strings (`mandate.checkout.open.1` / `mandate.payment.open.1`), same `cnf` agent-key binding, same `constraints[]` array, and the same `payment.reference.conditional_transaction_id` ("Digest of the associated Open Checkout Mandate"). AP2's **Intent Mandate** is a separate, higher-level human-present artifact (natural-language description + merchant/SKU lists), not this constraint credential. UCP has no formal pre-checkout delegation credential. No ACP equivalent. VI L2 Autonomous carries typed constraints (quantitative constraints are machine-enforceable; qualitative constraints are informational) |
 | **Layer 3 (L3a / L3b)** | Split Agent KB-SD-JWTs proving constraint satisfaction with finalized values. L3a (payment mandate) → payment network; L3b (checkout mandate) → merchant. Cross-referenced via `transaction_id` == `checkout_hash`. Short-lived (~5 min). Autonomous mode only | --- | --- | No equivalent in any protocol. AP2 assumes the agent's fulfillment is captured in the Cart Mandate after the agent shops. ACP has no agent fulfillment credential. L3 is a VI-specific contribution providing an auditable link between user constraints and agent actions |
 | **Checkout Mandate** | Selectively disclosable claim (`vct: "mandate.checkout.open.1"` Autonomous L2, `vct: "mandate.checkout.1"` Immediate L2 / L3b) describing allowed products (Autonomous) or finalized checkout (Immediate) | `line_items[]` in checkout (UCP) / Cart Mandate VDC (AP2) | `line_items[]` in checkout session | UCP models cart contents as `line_items[]` within checkout sessions. AP2 Cart Mandate includes payment details; VI checkout mandate is purely about products. ACP uses `line_items[]` in checkout sessions with a similar purpose. AP2 Intent Mandate `skus` field maps loosely to VI `mandate.checkout.line_items` constraint |
 | **Payment Mandate** | Selectively disclosable claim (`vct: "mandate.payment.open.1"` Autonomous L2, `vct: "mandate.payment.1"` Immediate L2 / L3a) describing allowed or final payment parameters | `payment.instruments` (UCP) / Payment Mandate VDC (AP2) | `payment_data` in CompleteCheckout + SPT `allowance` | UCP exposes payment instruments through the checkout session. ACP splits this across `payment_data` (in CompleteCheckout) and SPT `allowance` (for delegated execution). VI adds selective disclosure enforcement (merchant sees checkout, not payment; network sees payment, not checkout). AP2 shares the full Payment Mandate with the network |
@@ -55,7 +59,7 @@ differences.
 | VI Term | Definition | UCP / AP2 Equivalent | ACP Equivalent | Notes |
 |---------|-----------|----------------------|----------------|-------|
 | **Immediate Mode** | 2-layer flow (L1 + L2). User confirms final values directly. No agent delegation | User-confirmed checkout (UCP) / Human-Present transaction (AP2) | Buyer-confirmed checkout | Same conceptual flow across all three protocols. UCP models this as the user confirming checkout session contents. ACP models this as a buyer-confirmed checkout where the session reaches `ready_for_payment` before CompleteCheckout. AP2 defines detailed step-by-step interactions between UA/SA, ME, CP, MPP. VI focuses on the credential artifacts produced at each step |
-| **Autonomous Mode** | 3-layer flow (L1 + L2 + L3). User sets constraints; agent acts independently within bounds | Agent-driven checkout (UCP) / Human-Not-Present transaction (AP2) | Agent-driven checkout | UCP models this as the agent managing the checkout session end-to-end. ACP models this as the agent creating and completing the session independently, with SPT constraining payment execution. AP2's Human-Not-Present flow uses Intent Mandate + potential fallback to Cart Mandate. VI adds L3 as an auditable fulfillment layer and typed constraints (quantitative are machine-enforceable; qualitative are informational) |
+| **Autonomous Mode** | 3-layer flow (L1 + L2 + L3). User sets constraints; agent acts independently within bounds | Agent-driven checkout (UCP) / Human-Not-Present transaction (AP2) | Agent-driven checkout | UCP models this as the agent managing the checkout session end-to-end. ACP models this as the agent creating and completing the session independently, with SPT constraining payment execution. AP2 V2's Human-Not-Present flow is approval of **Open Checkout/Open Payment Mandates** (the Intent Mandate is the upstream human-present intent object). VI adds L3 as an auditable fulfillment layer and typed constraints (quantitative are machine-enforceable; qualitative are informational) |
 | **Delegation Chain** | Cryptographic chain linking Credential Provider -> User -> Agent via `cnf` claims at each layer | Implicit platform delegation (UCP) / Agent key delegation (AP2) | SPT `allowance` (loosely) | UCP delegates implicitly through platform identity; AP2 describes delegation conceptually. ACP's SPT scopes agent authority via amount/merchant/expiry, but constraints are set by the agent, not the buyer — a key semantic difference from VI's user-set constraints. VI implements delegation as a verifiable chain: L1 `cnf.jwk` = user key, L2 mandate `cnf.jwk` = agent key, L3 header `jwk` = agent key proof |
 | **Fallback to Immediate** | Merchant forces user confirmation when Intent Mandate is insufficient, converting to Immediate flow | `requires_escalation` status (UCP) / Merchant-forced confirmation (AP2) | `authentication_required` / `requires_escalation` state | Same concept across all three protocols. UCP uses the `requires_escalation` checkout status. ACP uses `authentication_required` or `requires_escalation` checkout states to signal that the seller forces buyer interaction. AP2 spec describes this as merchant requesting SA to bring user back into session |
 
@@ -94,8 +98,11 @@ conveyed by the L2 `typ` header.
 Recurrence mapping note: recurrence is expressed in VI via the
 `mandate.payment.recurrence` and `mandate.payment.agent_recurrence` constraint
 types (not a top-level mandate field). VI uses ISO 20022 frequency codes
-(e.g. `MNTH`, `WEEK`, `YEAR`), aligning with AP2's schema-level recurrence
-typing.
+(e.g. `MNTH`, `WEEK`, `YEAR`). Note this **differs** from AP2 V2, whose Open
+Payment Mandate `agent_recurrence` uses a named enum
+(`ON_DEMAND`, `DAILY`, `WEEKLY`, `BIWEEKLY`, `MONTHLY`, `QUARTERLY`, `ANNUALLY`);
+only `ON_DEMAND` overlaps. Implementations bridging VI and AP2 V2 must map
+between the two vocabularies.
 
 ---
 
