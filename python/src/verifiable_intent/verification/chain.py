@@ -42,6 +42,24 @@ def _is_expired(exp_value, now: int, skew: int) -> bool | None:
     return now > exp_value + skew
 
 
+def _duplicate_sd_digest(payload: dict) -> str | None:
+    """RFC 9901 section 7.1: a digest MUST NOT appear more than once in `_sd`.
+
+    Returns the first duplicate digest found, or None. A repeated digest is an
+    anti-ambiguity / anti-smuggling violation; valid credentials never carry one.
+    """
+    sd = payload.get("_sd")
+    if not isinstance(sd, list):
+        return None
+    seen: set[str] = set()
+    for h in sd:
+        if isinstance(h, str):
+            if h in seen:
+                return h
+            seen.add(h)
+    return None
+
+
 def _is_future_dated(iat_value, now: int, skew: int) -> bool | None:
     """Check if an iat claim is in the future. Returns None if iat is absent."""
     if iat_value is None:
@@ -217,6 +235,12 @@ def verify_chain(
         result.errors.append(f"L1 _sd_alg must be 'sha-256', got '{l1_sd_alg}'")
         return result
 
+    # 1b-bis. RFC 9901 section 7.1: reject duplicate disclosure digests in _sd
+    _l1_dup = _duplicate_sd_digest(l1.payload)
+    if _l1_dup is not None:
+        result.errors.append(f"L1 _sd contains a duplicate disclosure digest (RFC 9901 section 7.1): {_l1_dup}")
+        return result
+
     # 2. Check L1 expiration
     l1_exp = l1.payload.get("exp")
     if _is_expired(l1_exp, now, clock_skew_seconds):
@@ -267,6 +291,12 @@ def verify_chain(
     l2_sd_alg = l2.payload.get("_sd_alg")
     if l2_sd_alg is not None and l2_sd_alg != "sha-256":
         result.errors.append(f"L2 _sd_alg must be 'sha-256', got '{l2_sd_alg}'")
+        return result
+
+    # 4a2-bis. RFC 9901 section 7.1: reject duplicate disclosure digests in _sd
+    _l2_dup = _duplicate_sd_digest(l2.payload)
+    if _l2_dup is not None:
+        result.errors.append(f"L2 _sd contains a duplicate disclosure digest (RFC 9901 section 7.1): {_l2_dup}")
         return result
 
     # 4a3. Check L2 top-level iat not in the future
@@ -563,6 +593,13 @@ def verify_chain(
                 l3_sd_alg = l3.payload.get("_sd_alg")
                 if l3_sd_alg is not None and l3_sd_alg != "sha-256":
                     result.errors.append(f"{l3_label} _sd_alg must be 'sha-256', got '{l3_sd_alg}'")
+                    return result
+
+                _l3_dup = _duplicate_sd_digest(l3.payload)
+                if _l3_dup is not None:
+                    result.errors.append(
+                        f"{l3_label} _sd contains a duplicate disclosure digest (RFC 9901 section 7.1): {_l3_dup}"
+                    )
                     return result
 
                 l3_iat = l3.payload.get("iat")
