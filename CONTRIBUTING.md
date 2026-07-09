@@ -81,6 +81,14 @@ pytest
 python examples/autonomous_flow.py
 ```
 
+The TypeScript implementation lives in `typescript/`:
+
+```bash
+cd typescript
+npm install
+npm test
+```
+
 ## Reporting Issues
 
 Use [GitHub Issues](https://github.com/agent-intent/verifiable-intent/issues)
