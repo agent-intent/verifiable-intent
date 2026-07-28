@@ -3,10 +3,13 @@
 How Verifiable Intent (VI) sits alongside existing agentic commerce protocols.
 
 > **Protocol versions**: Based on the Universal Commerce Protocol (UCP) specification
-> as of 23 January 2026, the Agent Payments Protocol (AP2) specification as of
-> 16 September 2025, and the Agentic Commerce Protocol (ACP) specification as of
+> as of 23 January 2026, the Agent Payments Protocol (AP2) version 0.2.0 ("V2",
+> 28 April 2026), and the Agentic Commerce Protocol (ACP) specification as of
 > 30 January 2026. Protocol details may change; statements about what each protocol
-> "does not define" or "leaves open" are bounded by these versions.
+> "does not define" or "leaves open" are bounded by these versions. Note: AP2 V2
+> (0.2.0) added an SD-JWT-based Human-Not-Present model with Open Checkout/Open
+> Payment Mandates and `cnf` agent key binding, narrowing several gaps earlier
+> attributed to AP2 0.1.0.
 
 ---
 

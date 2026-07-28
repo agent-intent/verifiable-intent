@@ -10,6 +10,19 @@ Verifiable Intent defines a layered SD-JWT credential format that creates a
 tamper-evident chain providing cryptographic evidence that an AI agent's actions
 were within the scope delegated by a human user.
 
+## Repository layout
+
+This repository is a polyglot monorepo with reference implementations that share
+one specification and one set of conformance vectors:
+
+| Path | Contents |
+|------|----------|
+| [`python/`](python) | Python reference implementation (`verifiable-intent` package), tests, and examples |
+| [`typescript/`](typescript) | TypeScript port (`@verifiable-intent/core`), built on `@sd-jwt/*` |
+| [`spec/`](spec) | Normative specification (credential format, constraints, security model, design rationale) |
+| [`protocol-landscape/`](protocol-landscape) | Positioning relative to AP2, UCP, and ACP |
+| [`docs/`](docs) | Documentation site source ([verifiableintent.dev](https://verifiableintent.dev)) |
+
 ## The Problem
 
 When a human delegates a purchase to an AI agent, no party in the transaction
