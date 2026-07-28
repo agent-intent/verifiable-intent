@@ -13,11 +13,24 @@
 import { hashAscii, hashDisclosure } from '../crypto/disclosure.js';
 import { type SdJwt, resolveDisclosures, verifySdJwtSignature } from '../crypto/sd-jwt.js';
 import type { Es256Jwk } from '../crypto/signing.js';
-import type { JsonObject } from '../models/constraints.js';
+import type { JsonObject, KnownConstraintType } from '../models/constraints.js';
 import { asArray, isJsonObject } from '../internal/guards.js';
 import { verifyCheckoutHashBinding, verifyL2ReferenceBinding, verifyL3CrossReference } from './integrity.js';
 
 const ALLOWED_ALGS = new Set(['ES256']);
+
+/**
+ * Constraint types the spec assigns to the PAYMENT NETWORK to enforce: they are
+ * stateful (spend-so-far, occurrence counts), so this stateless verifier parses
+ * but never evaluates them (see constraint-checker.ts, "network-enforced
+ * constraints"). They are surfaced on `ChainVerificationResult.networkEnforced`
+ * so the caller/network knows what it still must enforce.
+ */
+const NETWORK_ENFORCED_TYPES: ReadonlySet<KnownConstraintType> = new Set([
+  'mandate.payment.budget',
+  'mandate.payment.recurrence',
+  'mandate.payment.agent_recurrence',
+]);
 
 const L1_VCT = 'https://credentials.mastercard.com/card';
 const L2_CHECKOUT_VCT_OPEN = 'mandate.checkout.open.1';
@@ -125,6 +138,20 @@ export class ChainVerificationResult {
   checksSkipped: string[] = [];
   pairResults: MandatePairResult[] = [];
   mandatePairCount = 0;
+  networkEnforced: NetworkEnforcedConstraint[] = [];
+}
+
+/**
+ * A network-enforced constraint found in a mandate pair's payment mandate.
+ * Purely informational: the stateless verifier did NOT evaluate it — the spec
+ * assigns enforcement of budget/recurrence to the payment network.
+ */
+export interface NetworkEnforcedConstraint {
+  /** Index of the mandate pair (into `ChainVerificationResult.pairResults`). */
+  pairIndex: number;
+  type: KnownConstraintType;
+  /** The raw constraint object as resolved from the payment mandate. */
+  constraint: JsonObject;
 }
 
 interface MandateInfo {
@@ -434,6 +461,21 @@ export async function verifyChain(l1: SdJwt, l2: SdJwt, opts: VerifyChainOptions
   if (mandatePairs.length === 0) {
     result.errors.push('L2 delegate_payload resolved zero mandate disclosures');
     return result;
+  }
+
+  // 4b-bis. Surface network-enforced constraints (additive, informational).
+  // The stateless verifier parses but never evaluates budget/recurrence — the
+  // spec assigns them to the payment network — so expose them here to tell the
+  // caller what it still must enforce. Collected from each pair's payment
+  // mandate; does not affect any verdict, error, or other result field.
+  for (const [pairIdx, pair] of mandatePairs.entries()) {
+    const paymentInfo = pair[1];
+    if (!paymentInfo) continue;
+    for (const c of asArray(paymentInfo.resolved.constraints)) {
+      if (isJsonObject(c) && NETWORK_ENFORCED_TYPES.has(c.type as KnownConstraintType)) {
+        result.networkEnforced.push({ pairIndex: pairIdx, type: c.type as KnownConstraintType, constraint: c });
+      }
+    }
   }
 
   // 4c. Per-pair mandate validation
