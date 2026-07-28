@@ -72,17 +72,17 @@ describe('primitives: base64url', () => {
 
 describe('primitives: disclosures', () => {
   V.primitives.disclosures.forEach((c: any, idx: number) => {
-    it(`disclosure #${idx} (${c.claim_name ?? 'array-element'})`, () => {
-      expect(createDisclosure(c.claim_name, c.value, c.salt)).toBe(c.disclosure);
-      expect(hashDisclosure(c.disclosure)).toBe(c.hash);
+    it(`disclosure #${idx} (${c.claim_name ?? 'array-element'})`, async () => {
+      expect(await createDisclosure(c.claim_name, c.value, c.salt)).toBe(c.disclosure);
+      expect(await hashDisclosure(c.disclosure)).toBe(c.hash);
     });
   });
 });
 
 describe('primitives: hash_bytes (ascii)', () => {
   V.primitives.hash_bytes.forEach((c: any, idx: number) => {
-    it(`hash #${idx}`, () => {
-      expect(hashAscii(c.input_ascii)).toBe(c.hash);
+    it(`hash #${idx}`, async () => {
+      expect(await hashAscii(c.input_ascii)).toBe(c.hash);
     });
   });
 });
@@ -138,9 +138,9 @@ describe('models: misc toJSON', () => {
 });
 
 describe('crypto interop: TS verifies Python-signed credentials', () => {
-  it('binds checkout_hash and l1 sd_hash', () => {
-    expect(hashAscii(V.shared.checkout_jwt)).toBe(V.shared.checkout_hash);
-    expect(hashAscii(V.shared.l1_serialized)).toBe(V.shared.l1_sd_hash);
+  it('binds checkout_hash and l1 sd_hash', async () => {
+    expect(await hashAscii(V.shared.checkout_jwt)).toBe(V.shared.checkout_hash);
+    expect(await hashAscii(V.shared.l1_serialized)).toBe(V.shared.l1_sd_hash);
   });
 
   it('verifies the Python L1 signature', async () => {
@@ -166,13 +166,13 @@ describe('crypto interop: TS verifies Python-signed credentials', () => {
 });
 
 describe('crypto: resolveDisclosures', () => {
-  it('resolves immediate delegate_payload to the mandate dicts', () => {
-    const resolved = resolveDisclosures(decodeSdJwt(V.immediate.l2.serialized));
+  it('resolves immediate delegate_payload to the mandate dicts', async () => {
+    const resolved = await resolveDisclosures(decodeSdJwt(V.immediate.l2.serialized));
     expect(resolved.delegate_payload).toEqual(V.immediate.l2.values);
   });
 
-  it('resolves autonomous delegate_payload to checkout + payment mandates', () => {
-    const resolved = resolveDisclosures(decodeSdJwt(V.autonomous.l2.serialized));
+  it('resolves autonomous delegate_payload to checkout + payment mandates', async () => {
+    const resolved = await resolveDisclosures(decodeSdJwt(V.autonomous.l2.serialized));
     const vals = V.autonomous.l2.values;
     expect(resolved.delegate_payload).toEqual([vals[vals.length - 2], vals[vals.length - 1]]);
   });
@@ -186,10 +186,10 @@ describe('disclosure reproduction from salt + value (array-element flows)', () =
     ['L3b', V.autonomous.l3b.credential],
   ];
   for (const [name, rec] of cases) {
-    it(`${name}`, () => {
+    it(`${name}`, async () => {
       for (let i = 0; i < rec.disclosures.length; i++) {
-        expect(createDisclosure(null, rec.values[i], rec.salts[i])).toBe(rec.disclosures[i]);
-        expect(hashDisclosure(rec.disclosures[i])).toBe(rec.sd_hashes_of_disclosures[i]);
+        expect(await createDisclosure(null, rec.values[i], rec.salts[i])).toBe(rec.disclosures[i]);
+        expect(await hashDisclosure(rec.disclosures[i])).toBe(rec.sd_hashes_of_disclosures[i]);
       }
     });
   }

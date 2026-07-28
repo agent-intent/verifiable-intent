@@ -1,15 +1,15 @@
 /**
- * ES256 (ECDSA P-256) signing built on `@sd-jwt/crypto-nodejs`, plus the
- * compact JWT encode/decode used throughout the Verifiable Intent layers.
+ * ES256 (ECDSA P-256) signing built on WebCrypto (`crypto.subtle` — a global in
+ * browsers and Node >= 20 alike), plus the compact JWT encode/decode used
+ * throughout the Verifiable Intent layers.
  *
- * The signer returns a base64url-encoded raw 64-byte (r‖s) JOSE signature — the
- * same form the Python reference produces — so signatures verify across both
+ * The signer returns a base64url-encoded raw 64-byte (r‖s) JOSE signature —
+ * exactly what WebCrypto's ECDSA produces (IEEE P1363 form) and the same form
+ * the Python reference produces — so signatures verify across both
  * implementations.
  */
 
-import { ES256 } from '@sd-jwt/crypto-nodejs';
-
-import { b64urlDecode, b64urlEncode, utf8 } from './base64url.js';
+import { b64urlDecode, b64urlEncode, utf8, utf8Decode } from './base64url.js';
 import { compactJson } from './json.js';
 
 /** An EC P-256 JSON Web Key. `d` is present only for private keys. */
@@ -24,6 +24,9 @@ export interface Es256Jwk {
 }
 
 export const ALG = 'ES256';
+
+const ECDSA_P256 = { name: 'ECDSA', namedCurve: 'P-256' } as const;
+const ECDSA_SHA256 = { name: 'ECDSA', hash: 'SHA-256' } as const;
 
 /**
  * JOSE header for JWTs this library constructs. `alg` is pinned to ES256 —
@@ -42,16 +45,25 @@ export type Signer = (data: string) => Promise<string>;
 export type Verifier = (data: string, signatureBase64url: string) => Promise<boolean>;
 
 export async function makeSigner(privateJwk: Es256Jwk): Promise<Signer> {
-  return ES256.getSigner(privateJwk);
+  const privateKey = await crypto.subtle.importKey('jwk', privateJwk, ECDSA_P256, false, ['sign']);
+  return async (data: string): Promise<string> => {
+    const signature = await crypto.subtle.sign(ECDSA_SHA256, privateKey, utf8(data));
+    return b64urlEncode(new Uint8Array(signature));
+  };
 }
 
 export async function makeVerifier(publicJwk: Es256Jwk): Promise<Verifier> {
-  return ES256.getVerifier(publicJwk);
+  const publicKey = await crypto.subtle.importKey('jwk', publicJwk, ECDSA_P256, false, ['verify']);
+  return async (data: string, signatureBase64url: string): Promise<boolean> => {
+    return crypto.subtle.verify(ECDSA_SHA256, publicKey, b64urlDecode(signatureBase64url), utf8(data));
+  };
 }
 
 export async function generateEs256Key(): Promise<{ publicKey: Es256Jwk; privateKey: Es256Jwk }> {
-  const { publicKey, privateKey } = await ES256.generateKeyPair();
-  return { publicKey: publicKey as Es256Jwk, privateKey: privateKey as Es256Jwk };
+  const keyPair = await crypto.subtle.generateKey(ECDSA_P256, true, ['sign', 'verify']);
+  const publicKey = (await crypto.subtle.exportKey('jwk', keyPair.publicKey)) as Es256Jwk;
+  const privateKey = (await crypto.subtle.exportKey('jwk', keyPair.privateKey)) as Es256Jwk;
+  return { publicKey, privateKey };
 }
 
 export interface JwtParts {
@@ -76,8 +88,8 @@ export function jwtDecodeParts(token: string): JwtParts {
   }
   // All three segments go through b64urlDecode so impossible base64 lengths and
   // non-ASCII input are rejected, matching Python's urlsafe_b64decode.
-  const header = JSON.parse(Buffer.from(b64urlDecode(headerB64)).toString('utf8')) as Record<string, unknown>;
-  const payload = JSON.parse(Buffer.from(b64urlDecode(payloadB64)).toString('utf8')) as Record<string, unknown>;
+  const header = JSON.parse(utf8Decode(b64urlDecode(headerB64))) as Record<string, unknown>;
+  const payload = JSON.parse(utf8Decode(b64urlDecode(payloadB64))) as Record<string, unknown>;
   const signature = b64urlDecode(sigB64);
   return { header, payload, signature };
 }

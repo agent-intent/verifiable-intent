@@ -275,7 +275,7 @@ export async function verifyChain(l1: SdJwt, l2: SdJwt, opts: VerifyChainOptions
     return result;
   }
 
-  result.l1Claims = resolveDisclosures(l1);
+  result.l1Claims = await resolveDisclosures(l1);
 
   // 3. Extract user's public key from L1 cnf
   const l1Cnf = l1.payload.cnf ?? {};
@@ -307,7 +307,7 @@ export async function verifyChain(l1: SdJwt, l2: SdJwt, opts: VerifyChainOptions
     result.errors.push('L2 missing required sd_hash binding to L1');
     return result;
   }
-  if (actualHash !== hashAscii(l1Ser)) {
+  if (actualHash !== (await hashAscii(l1Ser))) {
     result.errors.push('L2 sd_hash does not match L1 serialized form');
     return result;
   }
@@ -359,7 +359,7 @@ export async function verifyChain(l1: SdJwt, l2: SdJwt, opts: VerifyChainOptions
     result.checksSkipped.push('l2_nonce (no expected value provided)');
   }
 
-  result.l2Claims = resolveDisclosures(l2);
+  result.l2Claims = await resolveDisclosures(l2);
 
   // 4a-mode. Infer execution mode from L2 mandate VCTs.
   const resolvedDelegatesForMode = result.l2Claims.delegate_payload;
@@ -396,7 +396,7 @@ export async function verifyChain(l1: SdJwt, l2: SdJwt, opts: VerifyChainOptions
 
   // 4b. Extract and pair mandate disclosures
   const discStrByHash = new Map<string, string>();
-  for (const ds of l2.disclosures) discStrByHash.set(hashDisclosure(ds), ds);
+  for (const ds of l2.disclosures) discStrByHash.set(await hashDisclosure(ds), ds);
 
   const rawDelegates = l2.payload.delegate_payload;
   if (!Array.isArray(rawDelegates)) {
@@ -456,7 +456,7 @@ export async function verifyChain(l1: SdJwt, l2: SdJwt, opts: VerifyChainOptions
       errors: mpErrors,
       checksPerformed: mpChecks,
       checksSkipped: mpSkipped,
-    } = verifyMandatePair(checkoutMandate, paymentMandate, checkoutDiscB64, isAutonomous);
+    } = await verifyMandatePair(checkoutMandate, paymentMandate, checkoutDiscB64, isAutonomous);
     pairResult.checksPerformed.push(...mpChecks);
     pairResult.checksSkipped.push(...mpSkipped);
     result.checksPerformed.push(...mpChecks);
@@ -606,7 +606,7 @@ export async function verifyChain(l1: SdJwt, l2: SdJwt, opts: VerifyChainOptions
           result.errors.push(`${label} missing required sd_hash binding to L2`);
           return result;
         }
-        if (actualSdHash !== hashAscii(l3L2Ser)) {
+        if (actualSdHash !== (await hashAscii(l3L2Ser))) {
           result.errors.push(`${label} sd_hash does not match L2 serialized form`);
           return result;
         }
@@ -685,7 +685,7 @@ export async function verifyChain(l1: SdJwt, l2: SdJwt, opts: VerifyChainOptions
           return result;
         }
 
-        const l3Claims = resolveDisclosures(l3);
+        const l3Claims = await resolveDisclosures(l3);
         if (spec.isPayment) pairResult.l3PaymentClaims = l3Claims;
         else pairResult.l3CheckoutClaims = l3Claims;
 
@@ -951,12 +951,12 @@ function pairAutonomous(checkouts: MandateInfo[], payments: MandateInfo[]): Mand
   return { pairs, errors: [] };
 }
 
-function verifyMandatePair(
+async function verifyMandatePair(
   checkoutMandate: JsonObject | null,
   paymentMandate: JsonObject | null,
   checkoutDiscB64: string | null,
   isAutonomous: boolean,
-): MandatePairCheck {
+): Promise<MandatePairCheck> {
   const checksPerformed: string[] = [];
   const checksSkipped: string[] = [];
   const fail = (error: string): MandatePairCheck => ({ errors: [error], checksPerformed: [], checksSkipped: [] });
@@ -1009,7 +1009,7 @@ function verifyMandatePair(
       if (paymentFieldError) return fail(paymentFieldError);
       checksPerformed.push('closed_payment_required_fields');
     }
-    const { valid: bindingValid, error: bindingError } = verifyCheckoutHashBinding(checkoutMandate, paymentMandate);
+    const { valid: bindingValid, error: bindingError } = await verifyCheckoutHashBinding(checkoutMandate, paymentMandate);
     if (!bindingValid) return fail(`L2 checkout-payment binding failed: ${bindingError}`);
     checksPerformed.push('l2_checkout_payment_binding');
   }
@@ -1019,7 +1019,7 @@ function verifyMandatePair(
       if (!checkoutDiscB64) {
         return fail('L2 checkout mandate disclosure string is missing (required for reference binding verification)');
       }
-      const { valid: bindingValid, error: bindingError } = verifyL2ReferenceBinding(
+      const { valid: bindingValid, error: bindingError } = await verifyL2ReferenceBinding(
         checkoutMandate,
         paymentMandate,
         checkoutDiscB64,

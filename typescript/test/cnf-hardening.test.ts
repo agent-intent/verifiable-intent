@@ -190,7 +190,7 @@ async function makeAutonomousChain(opts: ChainOptions = {}): Promise<Chain> {
     iss: 'https://wallet.example.com',
     exp: NOW + 86400,
     mode: MandateMode.AUTONOMOUS,
-    sdHash: hashAscii(l1Ser),
+    sdHash: await hashAscii(l1Ser),
     checkoutMandate,
     paymentMandate,
     merchants: MERCHANTS,
@@ -206,7 +206,7 @@ async function makeAutonomousChain(opts: ChainOptions = {}): Promise<Chain> {
   const itemDisc = findDisclosure(l2, (v) => v.id === 'BAB86345');
 
   const checkoutJwt = await merchantCheckoutJwt(merchant);
-  const cHash = hashAscii(checkoutJwt);
+  const cHash = await hashAscii(checkoutJwt);
 
   const l3a = await createLayer3Payment(
     new PaymentL3Mandate({
@@ -294,7 +294,7 @@ async function buildL1L2WithCnf(cnf: unknown): Promise<{ l1: SdJwt; l2: SdJwt }>
   );
   const l2 = await createSdJwt(
     { alg: 'ES256', typ: 'kb-sd-jwt' },
-    { nonce: salts(), aud: 'test', iat: NOW, sd_hash: hashAscii(l1.serialize()), delegate_payload: [] },
+    { nonce: salts(), aud: 'test', iat: NOW, sd_hash: await hashAscii(l1.serialize()), delegate_payload: [] },
     [],
     user.privateKey,
   );
@@ -384,7 +384,7 @@ describe('cnf hardening: agent delegation key extraction (chain.ts §4d)', () =>
     // with cnf is appended to the L2 but never referenced by delegate_payload.
     // It must not satisfy agent-key extraction.
     const c = await makeAutonomousChain({ includeCheckoutCnf: false, includePaymentCnf: false });
-    const fake = createDisclosure(null, { vct: 'mandate.checkout.open.1', cnf: { jwk: jwkOf(c.agent) } });
+    const fake = await createDisclosure(null, { vct: 'mandate.checkout.open.1', cnf: { jwk: jwkOf(c.agent) } });
     const tamperedL2 = decodeSdJwt(`${c.l2Ser.slice(0, -1)}~${fake}~`);
     const res = await verifyChain(c.l1, tamperedL2, {
       l3Payment: c.l3a,
@@ -401,7 +401,7 @@ describe('cnf hardening: agent delegation key extraction (chain.ts §4d)', () =>
     // Same, but the injected disclosure is a merchant/payee object carrying cnf.
     // A cnf on a non-mandate disclosure must not be used for delegation.
     const c = await makeAutonomousChain({ includeCheckoutCnf: false, includePaymentCnf: false });
-    const fake = createDisclosure(null, {
+    const fake = await createDisclosure(null, {
       id: 'merchant-injected',
       name: 'Injected Merchant',
       website: 'https://example.invalid',
@@ -467,7 +467,7 @@ describe('cnf hardening: in-memory L1 cnf swap is caught by the issuer signature
     );
 
     const checkoutJwt = await merchantCheckoutJwt(merchant);
-    const cHash = hashAscii(checkoutJwt);
+    const cHash = await hashAscii(checkoutJwt);
     const userMandate = new UserMandate({
       nonce: 'n-imm',
       aud: 'https://www.agent.com',
@@ -475,7 +475,7 @@ describe('cnf hardening: in-memory L1 cnf swap is caught by the issuer signature
       iss: 'https://wallet.example.com',
       exp: NOW + 900,
       mode: MandateMode.IMMEDIATE,
-      sdHash: hashAscii(l1.serialize()),
+      sdHash: await hashAscii(l1.serialize()),
       checkoutMandate: new CheckoutMandate({ vct: 'mandate.checkout.1', checkoutJwt }),
       paymentMandate: new PaymentMandate({
         vct: 'mandate.payment.1',

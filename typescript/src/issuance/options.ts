@@ -4,7 +4,7 @@
  * Produces disclosure salts. Defaults to a cryptographically random source.
  * Tests inject a deterministic FIFO source to reproduce recorded vectors.
  */
-export type SaltSource = () => string;
+export type SaltSource = () => string | Promise<string>;
 
 export interface IssueOptions {
   /** Key identifier placed in the JWT header. Defaults per layer. */

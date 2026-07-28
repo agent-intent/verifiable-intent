@@ -44,19 +44,19 @@ export async function createLayer3Payment(
 
   const disclosures: string[] = [];
   if (mandate.finalMerchant) {
-    disclosures.push(createDisclosure(null, mandate.finalMerchant, nextSalt()));
+    disclosures.push(await createDisclosure(null, mandate.finalMerchant, await nextSalt()));
   }
   if (mandate.finalPayment) {
-    disclosures.push(createDisclosure(null, mandate.finalPayment.toJSON(), nextSalt()));
+    disclosures.push(await createDisclosure(null, mandate.finalPayment.toJSON(), await nextSalt()));
   }
 
-  const delegatePayload = disclosures.map((d) => createDelegateRef(hashDisclosure(d)));
+  const delegatePayload = await Promise.all(disclosures.map(async (d) => createDelegateRef(await hashDisclosure(d))));
 
   const selectivePresentation = buildSelectivePresentation(presentation.l2BaseJwt, [
     presentation.paymentDisclosure,
     presentation.merchantDisclosure,
   ]);
-  const sdHash = hashAscii(selectivePresentation);
+  const sdHash = await hashAscii(selectivePresentation);
 
   const payload: Record<string, unknown> = {
     nonce: mandate.nonce,
@@ -99,16 +99,16 @@ export async function createLayer3Checkout(
 
   const disclosures: string[] = [];
   if (mandate.finalCheckout) {
-    disclosures.push(createDisclosure(null, mandate.finalCheckout.toJSON(), nextSalt()));
+    disclosures.push(await createDisclosure(null, mandate.finalCheckout.toJSON(), await nextSalt()));
   }
 
-  const delegatePayload = disclosures.map((d) => createDelegateRef(hashDisclosure(d)));
+  const delegatePayload = await Promise.all(disclosures.map(async (d) => createDelegateRef(await hashDisclosure(d))));
 
   const selectivePresentation = buildSelectivePresentation(presentation.l2BaseJwt, [
     presentation.checkoutDisclosure,
     presentation.itemDisclosure,
   ]);
-  const sdHash = hashAscii(selectivePresentation);
+  const sdHash = await hashAscii(selectivePresentation);
 
   const payload: Record<string, unknown> = {
     nonce: mandate.nonce,

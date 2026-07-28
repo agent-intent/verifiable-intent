@@ -2,17 +2,20 @@ import { defineConfig } from 'tsdown';
 
 /**
  * Build config for the publishable npm package. Produces dual ESM (.mjs) + CJS
- * (.cjs) output with bundled type declarations. The `@sd-jwt/*` runtime deps are
- * auto-externalized (they're in "dependencies"), so they stay as deps rather
- * than being inlined. `platform: 'node'` targets node:crypto (via
- * @sd-jwt/crypto-nodejs) and emits fixed .mjs/.cjs extensions.
+ * (.cjs) output with bundled type declarations. The package has zero runtime
+ * dependencies and uses only Web-standard globals (WebCrypto, TextEncoder), so
+ * `platform: 'neutral'` keeps the bundle environment-agnostic — it runs on
+ * Node >= 20 and in modern browsers. Emits fixed .mjs/.cjs extensions.
  *
  * Authored as .mjs (not .ts) so tsdown loads it natively without a TS config loader.
  */
 export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm', 'cjs'],
-  platform: 'node',
+  platform: 'neutral',
+  // fixedExtension defaults to true only on platform 'node'; force it so the
+  // ESM/CJS outputs keep the fixed .mjs/.cjs extensions the exports map expects.
+  fixedExtension: true,
   dts: true,
   sourcemap: true,
   clean: true,

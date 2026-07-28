@@ -145,7 +145,7 @@ async function buildImmediateChain(): Promise<ImmediateChain> {
     iss: 'https://wallet.example.com',
     exp: now + 900,
     mode: MandateMode.IMMEDIATE,
-    sdHash: hashAscii(l1.serialize()),
+    sdHash: await hashAscii(l1.serialize()),
     promptSummary: 'Purchase Babolat Pure Aero racket',
     // Final values; no cnf, no delegation. checkout_hash + transaction_id are
     // auto-computed from checkout_jwt by createLayer2Immediate (default path).
@@ -203,7 +203,7 @@ async function buildAutonomousChain(): Promise<AutonomousChain> {
     iss: 'https://wallet.example.com',
     exp: now + 86400,
     mode: MandateMode.AUTONOMOUS,
-    sdHash: hashAscii(l1.serialize()),
+    sdHash: await hashAscii(l1.serialize()),
     promptSummary: 'Buy a Babolat tennis racket under $400',
     checkoutMandate: new CheckoutMandate({
       vct: 'mandate.checkout.open.1',
@@ -239,7 +239,7 @@ async function buildAutonomousChain(): Promise<AutonomousChain> {
   const itemDisc = findDisclosure(l2, (v) => isObj(v) && v.id === 'BAB86345');
 
   const checkoutJwt = await makeCheckoutJwt(merchant.privateKey, now);
-  const cHash = hashAscii(checkoutJwt);
+  const cHash = await hashAscii(checkoutJwt);
   const l3Nonce = randomUUID();
 
   // L3a: payment fulfillment for the network.
@@ -445,7 +445,7 @@ describe('roundtrip: checkConstraints against the issued open payment mandate', 
     const c = await buildAutonomousChain();
 
     // Extract the payment mandate's constraints straight from the issued L2.
-    const resolved = resolveDisclosures(c.l2);
+    const resolved = await resolveDisclosures(c.l2);
     const delegates = Array.isArray(resolved.delegate_payload) ? resolved.delegate_payload : [];
     const paymentMandate = delegates.find((d) => isObj(d) && d.vct === 'mandate.payment.open.1');
     if (!isObj(paymentMandate) || !Array.isArray(paymentMandate.constraints)) {
@@ -460,7 +460,7 @@ describe('roundtrip: checkConstraints against the issued open payment mandate', 
       const disc = c.l2.disclosures[i];
       const dv = c.l2.disclosureValues[i];
       if (disc === undefined || dv === undefined) continue;
-      valueByHash.set(hashDisclosure(disc), dv[dv.length - 1]);
+      valueByHash.set(await hashDisclosure(disc), dv[dv.length - 1]);
     }
     const allowedMerchants: unknown[] = [];
     for (const con of paymentConstraints) {

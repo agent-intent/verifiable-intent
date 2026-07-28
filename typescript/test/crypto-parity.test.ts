@@ -128,7 +128,7 @@ describe('SdJwt.serialize — Python list-index semantics', () => {
 });
 
 describe('resolveDisclosures — presentation-order resolution (last PRESENTED wins)', () => {
-  it('resolves the claim to the last presented disclosure, not the last _sd entry', () => {
+  it('resolves the claim to the last presented disclosure, not the last _sd entry', async () => {
     // dA/dB both disclose claim `vct`. `_sd` lists [hash(dA), hash(dB)] but the
     // disclosures are PRESENTED as [dB, dA]. Python's zip(disclosures, values)
     // loop applies them in presentation order, so dA (last presented) wins → 'AAA'.
@@ -138,13 +138,13 @@ describe('resolveDisclosures — presentation-order resolution (last PRESENTED w
 
     const sdJwt = new SdJwt({
       header: {},
-      payload: { _sd: [hashDisclosure(dA), hashDisclosure(dB)] },
+      payload: { _sd: [await hashDisclosure(dA), await hashDisclosure(dB)] },
       signature: new Uint8Array(64),
       disclosures: [dB, dA],
       disclosureValues: [decodeDisclosure(dB), decodeDisclosure(dA)] as DecodedDisclosure[],
     });
 
-    expect(resolveDisclosures(sdJwt).vct).toBe('AAA');
+    expect((await resolveDisclosures(sdJwt)).vct).toBe('AAA');
   });
 });
 

@@ -22,11 +22,11 @@ export async function createLayer1(
 
   const disclosures: string[] = [];
   if (credential.email !== null) {
-    disclosures.push(createDisclosure('email', credential.email, nextSalt()));
+    disclosures.push(await createDisclosure('email', credential.email, await nextSalt()));
   }
 
   const payload = credential.toJSON();
-  payload['_sd'] = createSdArray(disclosures);
+  payload['_sd'] = await createSdArray(disclosures);
   payload['_sd_alg'] = 'sha-256';
 
   const header: IssuanceHeader = { alg: 'ES256', typ: 'sd+jwt', kid };

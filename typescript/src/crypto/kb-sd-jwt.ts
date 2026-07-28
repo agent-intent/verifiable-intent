@@ -65,7 +65,7 @@ export async function createKbSdJwt(
 ): Promise<SdJwtWithKb> {
   const payload: Record<string, unknown> = { ...holderPayload };
   if (!('sd_hash' in payload)) {
-    payload['sd_hash'] = hashAscii(sdJwt.serialize(disclosedIndices ?? undefined));
+    payload['sd_hash'] = await hashAscii(sdJwt.serialize(disclosedIndices ?? undefined));
   }
   const signer = await makeSigner(holderPrivateJwk);
   const token = await jwtEncode(holderHeader, payload, signer);

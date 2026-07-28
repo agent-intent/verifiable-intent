@@ -44,7 +44,7 @@ export async function createLayer2Immediate(
   // Auto-compute checkout_hash and transaction_id BEFORE disclosure serialization.
   const cm = mandate.checkoutMandate;
   if (cm && cm.checkoutJwt) {
-    const computedHash = hashAscii(cm.checkoutJwt);
+    const computedHash = await hashAscii(cm.checkoutJwt);
     if (!cm.checkoutHash) cm.checkoutHash = computedHash;
     if (mandate.paymentMandate && !mandate.paymentMandate.transactionId) {
       mandate.paymentMandate.transactionId = computedHash;
@@ -52,13 +52,13 @@ export async function createLayer2Immediate(
   }
 
   if (mandate.checkoutMandate) {
-    disclosures.push(createDisclosure(null, mandate.checkoutMandate.toJSON(), nextSalt()));
+    disclosures.push(await createDisclosure(null, mandate.checkoutMandate.toJSON(), await nextSalt()));
   }
   if (mandate.paymentMandate) {
-    disclosures.push(createDisclosure(null, mandate.paymentMandate.toJSON(), nextSalt()));
+    disclosures.push(await createDisclosure(null, mandate.paymentMandate.toJSON(), await nextSalt()));
   }
 
-  const delegatePayload = disclosures.map((d) => createDelegateRef(hashDisclosure(d)));
+  const delegatePayload = await Promise.all(disclosures.map(async (d) => createDelegateRef(await hashDisclosure(d))));
 
   const payload: Record<string, unknown> = {
     nonce: mandate.nonce,
@@ -71,7 +71,7 @@ export async function createLayer2Immediate(
   if (mandate.iss !== null) payload.iss = mandate.iss;
   if (mandate.exp !== null) payload.exp = mandate.exp;
 
-  const sdHashes = disclosures.map(hashDisclosure);
+  const sdHashes = await Promise.all(disclosures.map(hashDisclosure));
   if (sdHashes.length) payload._sd = sdHashes;
 
   const header: IssuanceHeader = { alg: 'ES256', typ: 'kb-sd-jwt', kid };
@@ -96,17 +96,17 @@ export async function createLayer2Autonomous(
   // 1. Standalone merchant disclosures
   const merchantDiscHashes: string[] = [];
   for (const merchant of mandate.merchants) {
-    const d = createDisclosure(null, merchant, nextSalt());
+    const d = await createDisclosure(null, merchant, await nextSalt());
     disclosures.push(d);
-    merchantDiscHashes.push(hashDisclosure(d));
+    merchantDiscHashes.push(await hashDisclosure(d));
   }
 
   // 2. Standalone acceptable item disclosures
   const itemDiscHashes: string[] = [];
   for (const item of mandate.acceptableItems) {
-    const d = createDisclosure(null, item, nextSalt());
+    const d = await createDisclosure(null, item, await nextSalt());
     disclosures.push(d);
-    itemDiscHashes.push(hashDisclosure(d));
+    itemDiscHashes.push(await hashDisclosure(d));
   }
 
   // 3. Open checkout mandate disclosure (constraint merchant/item refs scoped to subset)
@@ -122,7 +122,7 @@ export async function createLayer2Autonomous(
         }
       }
     }
-    checkoutDisc = createDisclosure(null, checkoutObj, nextSalt());
+    checkoutDisc = await createDisclosure(null, checkoutObj, await nextSalt());
     disclosures.push(checkoutDisc);
   }
 
@@ -136,20 +136,20 @@ export async function createLayer2Autonomous(
       }
     }
     if (checkoutDisc !== null) {
-      const refConstraint = new ReferenceConstraint({ conditionalTransactionId: hashDisclosure(checkoutDisc) });
+      const refConstraint = new ReferenceConstraint({ conditionalTransactionId: await hashDisclosure(checkoutDisc) });
       if (!Array.isArray(paymentObj.constraints)) paymentObj.constraints = [];
       (paymentObj.constraints as JsonObject[]).push(refConstraint.toJSON());
     }
-    paymentDisc = createDisclosure(null, paymentObj, nextSalt());
+    paymentDisc = await createDisclosure(null, paymentObj, await nextSalt());
     disclosures.push(paymentDisc);
   }
 
   // 5. delegate_payload references the two mandate disclosures
   const delegatePayload: DelegateRef[] = [];
-  if (checkoutDisc) delegatePayload.push(createDelegateRef(hashDisclosure(checkoutDisc)));
-  if (paymentDisc) delegatePayload.push(createDelegateRef(hashDisclosure(paymentDisc)));
+  if (checkoutDisc) delegatePayload.push(createDelegateRef(await hashDisclosure(checkoutDisc)));
+  if (paymentDisc) delegatePayload.push(createDelegateRef(await hashDisclosure(paymentDisc)));
 
-  const sdHashes = disclosures.map(hashDisclosure);
+  const sdHashes = await Promise.all(disclosures.map(hashDisclosure));
 
   const payload: Record<string, unknown> = {
     nonce: mandate.nonce,

@@ -97,12 +97,12 @@ describe('verification: constraint checker (counts match Python)', () => {
 
 describe('verification: integrity', () => {
   for (const c of C.integrity_cases) {
-    it(c.name, () => {
+    it(c.name, async () => {
       let valid: boolean;
       if (c.kind === 'checkout_hash') {
-        valid = verifyCheckoutHashBinding(c.checkout_mandate, c.payment_mandate).valid;
+        valid = (await verifyCheckoutHashBinding(c.checkout_mandate, c.payment_mandate)).valid;
       } else if (c.kind === 'l2_ref') {
-        valid = verifyL2ReferenceBinding({}, c.payment_mandate, c.checkout_disclosure).valid;
+        valid = (await verifyL2ReferenceBinding({}, c.payment_mandate, c.checkout_disclosure)).valid;
       } else {
         valid = verifyL3CrossReference(c.l3_payment_claims, c.l3_checkout_claims).valid;
       }

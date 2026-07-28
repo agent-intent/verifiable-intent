@@ -11,43 +11,48 @@ export interface IntegrityResult {
 }
 
 /** Verify checkout_hash = SHA-256(checkout_jwt) and transaction_id = checkout_hash. */
-export function verifyCheckoutHashBinding(checkoutMandate: JsonObject, paymentMandate: JsonObject): IntegrityResult {
+export function verifyCheckoutHashBinding(checkoutMandate: JsonObject, paymentMandate: JsonObject): Promise<IntegrityResult> {
   const checkoutJwt = checkoutMandate.checkout_jwt;
   if (checkoutJwt !== undefined && checkoutJwt !== null && typeof checkoutJwt !== 'string') {
-    return { valid: false, error: `checkout_jwt must be a string, got ${typeof checkoutJwt}` };
+    return Promise.resolve({ valid: false, error: `checkout_jwt must be a string, got ${typeof checkoutJwt}` });
   }
-  if (!checkoutJwt) return { valid: true, error: '' }; // no checkout_jwt to bind
+  if (!checkoutJwt) return Promise.resolve({ valid: true, error: '' }); // no checkout_jwt to bind
 
   const checkoutHash = checkoutMandate.checkout_hash;
   if (!checkoutHash) {
-    return { valid: false, error: 'checkout_jwt present but checkout_hash missing from checkout mandate' };
+    return Promise.resolve({ valid: false, error: 'checkout_jwt present but checkout_hash missing from checkout mandate' });
   }
 
-  const computed = hashAscii(checkoutJwt as string);
-  if (computed !== checkoutHash) {
-    return { valid: false, error: `checkout_hash mismatch: computed ${computed} != expected ${String(checkoutHash)}` };
-  }
+  // Deliberately NOT declared `async`: hashAscii throws synchronously on
+  // non-ASCII input, and letting that propagate matches Python's uncaught
+  // UnicodeEncodeError (pinned by the parity tests). An `async` function would
+  // convert the throw into a rejection.
+  return hashAscii(checkoutJwt as string).then((computed) => {
+    if (computed !== checkoutHash) {
+      return { valid: false, error: `checkout_hash mismatch: computed ${computed} != expected ${String(checkoutHash)}` };
+    }
 
-  const transactionId = paymentMandate.transaction_id;
-  if (!transactionId) {
-    return { valid: false, error: 'checkout_jwt present but transaction_id missing from payment mandate' };
-  }
-  if (transactionId !== checkoutHash) {
-    return {
-      valid: false,
-      error: `transaction_id mismatch: ${String(transactionId)} != checkout_hash ${String(checkoutHash)}`,
-    };
-  }
+    const transactionId = paymentMandate.transaction_id;
+    if (!transactionId) {
+      return { valid: false, error: 'checkout_jwt present but transaction_id missing from payment mandate' };
+    }
+    if (transactionId !== checkoutHash) {
+      return {
+        valid: false,
+        error: `transaction_id mismatch: ${String(transactionId)} != checkout_hash ${String(checkoutHash)}`,
+      };
+    }
 
-  return { valid: true, error: '' };
+    return { valid: true, error: '' };
+  });
 }
 
 /** Verify the L2 mandate.payment.reference constraint binds to the L2 checkout disclosure. */
-export function verifyL2ReferenceBinding(
+export async function verifyL2ReferenceBinding(
   _checkoutMandate: JsonObject,
   paymentMandate: JsonObject,
   checkoutDisclosureB64: string,
-): IntegrityResult {
+): Promise<IntegrityResult> {
   const constraints = paymentMandate.constraints;
   let refConstraint: JsonObject | null = null;
   for (const c of Array.isArray(constraints) ? constraints : []) {
@@ -63,7 +68,7 @@ export function verifyL2ReferenceBinding(
     return { valid: false, error: 'mandate.payment.reference missing required conditional_transaction_id' };
   }
 
-  const computedHash = hashDisclosure(checkoutDisclosureB64);
+  const computedHash = await hashDisclosure(checkoutDisclosureB64);
   if (computedHash !== expectedId) {
     return { valid: false, error: `conditional_transaction_id mismatch: computed ${computedHash} != expected ${expectedId}` };
   }

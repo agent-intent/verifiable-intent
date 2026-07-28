@@ -1,6 +1,6 @@
 /** SD-JWT creation, parsing, signature verification, and disclosure resolution. */
 
-import { b64urlDecode, b64urlEncode, utf8 } from './base64url.js';
+import { b64urlDecode, b64urlEncode, utf8, utf8Decode } from './base64url.js';
 import { type DecodedDisclosure, decodeDisclosure, hashDisclosure } from './disclosure.js';
 import { compactJson } from './json.js';
 import { parsePySegment, pyDeepEqual } from './py-json.js';
@@ -146,7 +146,7 @@ export async function verifySdJwtSignature(sdJwt: SdJwt, publicJwk: Es256Jwk): P
  */
 function reencodeSegmentB64(rawB64: string | null, current: Record<string, unknown>): string {
   if (rawB64 !== null) {
-    const seg = parsePySegment(Buffer.from(b64urlDecode(rawB64)).toString('utf8'));
+    const seg = parsePySegment(utf8Decode(b64urlDecode(rawB64)));
     if (seg !== null && pyDeepEqual(seg.value, current)) {
       return b64urlEncode(utf8(seg.pyText));
     }
@@ -155,7 +155,7 @@ function reencodeSegmentB64(rawB64: string | null, current: Record<string, unkno
 }
 
 /** Resolve all disclosures into the payload, returning a full claim set. */
-export function resolveDisclosures(sdJwt: SdJwt): Record<string, unknown> {
+export async function resolveDisclosures(sdJwt: SdJwt): Promise<Record<string, unknown>> {
   const result: Record<string, unknown> = { ...sdJwt.payload };
 
   const sdRaw = result['_sd'];
@@ -172,7 +172,7 @@ export function resolveDisclosures(sdJwt: SdJwt): Record<string, unknown> {
     const disc = sdJwt.disclosures[i];
     const dv = sdJwt.disclosureValues[i];
     if (disc === undefined || dv === undefined) continue;
-    const discHash = hashDisclosure(disc);
+    const discHash = await hashDisclosure(disc);
     valueByHash.set(discHash, dv);
     if (sdHashes.has(discHash) && dv.length === 3 && typeof dv[1] === 'string') {
       result[dv[1]] = dv[2];
