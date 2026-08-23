@@ -14,6 +14,7 @@ from ..crypto.signing import jwk_to_public_key
 from .integrity import verify_checkout_hash_binding, verify_l2_reference_binding, verify_l3_cross_reference
 
 _ALLOWED_ALGS = {"ES256"}
+_ALLOWED_L1_TYPES = {"sd+jwt", "dc+sd-jwt"}
 
 # VCT constants
 _L1_VCT = "https://credentials.mastercard.com/card"
@@ -56,7 +57,7 @@ def _is_future_dated(iat_value, now: int, skew: int) -> bool | None:
     return iat_value > now + skew
 
 
-def _validate_header(header, layer: str, expected_typ: str) -> str | None:
+def _validate_header(header, layer: str, expected_typ: str | set[str]) -> str | None:
     """Validate typ and alg JWT header fields. Returns error message or None."""
     if not isinstance(header, dict):
         return f"{layer} header must be a JSON object, got {type(header).__name__}"
@@ -64,8 +65,15 @@ def _validate_header(header, layer: str, expected_typ: str) -> str | None:
     if not isinstance(alg, str) or alg not in _ALLOWED_ALGS:
         return f"{layer} header alg must be one of {_ALLOWED_ALGS}, got {type(alg).__name__} '{alg!s:.64}'"
     typ = header.get("typ")
-    if not isinstance(typ, str) or typ != expected_typ:
-        return f"{layer} header typ must be '{expected_typ}', got {type(typ).__name__} '{typ!s:.64}'"
+    if not isinstance(typ, str):
+        return f"{layer} header typ must be a string, got {type(typ).__name__} '{typ!s:.64}'"
+    if isinstance(expected_typ, str):
+        if typ != expected_typ:
+            return f"{layer} header typ must be '{expected_typ}', got {type(typ).__name__} '{typ!s:.64}'"
+    else:
+        if typ not in expected_typ:
+            expected_list = ", ".join(sorted(expected_typ))
+            return f"{layer} header typ must be one of {{{expected_list}}}, got {type(typ).__name__} '{typ!s:.64}'"
     return None
 
 
@@ -189,9 +197,37 @@ def verify_chain(
 
     # 1. Verify L1 signature (fail-closed: require key unless explicitly skipped)
     if issuer_public_key:
-        if not verify_sd_jwt_signature(l1, issuer_public_key):
-            result.errors.append("L1 signature verification failed")
-            return result
+        if l1_serialized:
+            # [Keycloak / External Integration Mode]
+            # Directly execute es256_verify to avoid re-serialization discrepancies,
+            # mimicking the core logic of verify_sd_jwt_signature.
+            try:
+                parts = l1_serialized.split(".")
+                if len(parts) < 3:
+                    result.errors.append("L1 signature verification failed: Invalid JWT format")
+                    return result
+                
+                # 1. Convert the signing input (Header.Payload) into an ASCII byte sequence
+                signing_input = f"{parts[0]}.{parts[1]}".encode("ascii")
+                
+                # 2. Pass the cached, decoded signature bytes (l1.signature) to es256_verify.
+                # Note: es256_verify handles base64-decoding internally.
+                # The first argument is the byte sequence to be verified (signing_input),
+                # and the second argument is the decoded signature (bytes) cached in l1.signature.
+                
+                from verifiable_intent.crypto.signing import es256_verify  # Import target for signature verification
+                
+                if not es256_verify(signing_input, l1.signature, issuer_public_key):
+                    result.errors.append("L1 signature verification failed (external serialized string)")
+                    return result
+                
+            except Exception as e:
+                result.errors.append(f"L1 signature verification failed (external serialized string): {e}")
+                return result
+        else:
+            if not verify_sd_jwt_signature(l1, issuer_public_key):
+                result.errors.append("L1 signature verification failed")
+                return result
     elif not skip_issuer_verification:
         result.errors.append(
             "issuer_public_key is required for chain verification "
@@ -199,8 +235,8 @@ def verify_chain(
         )
         return result
 
-    # 1a0. Validate L1 header
-    l1_header_err = _validate_header(l1.header, "L1", "sd+jwt")
+    # 1a0. Validate L1 header (support both current and Keycloak DC-type SD-JWTs)
+    l1_header_err = _validate_header(l1.header, "L1", _ALLOWED_L1_TYPES)
     if l1_header_err:
         result.errors.append(l1_header_err)
         return result

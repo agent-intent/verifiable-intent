@@ -11,8 +11,16 @@ Run: python examples/autonomous_flow.py
 
 from __future__ import annotations
 
+import json
+import os
 import time
 import uuid
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+from authlib.jose import jwt
 
 # Import helpers first — it bootstraps sys.path so the SDK is importable
 # even without an editable install.
@@ -37,6 +45,7 @@ from helpers import (
     success,
 )
 from verifiable_intent.crypto.disclosure import build_selective_presentation, hash_bytes
+from verifiable_intent.crypto.signing import jwk_to_public_key
 from verifiable_intent.crypto.sd_jwt import decode_sd_jwt, resolve_disclosures
 from verifiable_intent.issuance.agent import create_layer3_checkout, create_layer3_payment
 from verifiable_intent.issuance.issuer import create_layer1
@@ -73,6 +82,174 @@ def _find_disclosure(sd_jwt, predicate):
             return disc_str
     return None
 
+def _load_external_issuer_jwk() -> dict | None:
+    """Automatically retrieve the active ES256 signing key from Keycloak's JWKS endpoint."""
+    jwks_url = os.environ.get("KEYCLOAK_JWKS_URL")
+    if not jwks_url:
+        return None
+    
+    try:
+        req = Request(jwks_url, method="GET")
+        with urlopen(req) as response:
+            jwks = json.loads(response.read().decode("utf-8"))
+            keys = jwks.get("keys", [])
+            
+            # Find the ES256 key used for OID4VCI (SD-JWT) signatures
+            for key in keys:
+                if key.get("alg") == "ES256" and key.get("use") == "sig":
+                    #print(f"DEBUG: Keycloak Key Body: {key}")
+                    return key
+                    
+            # Fall back to the first EC key if no explicit ES256 is found
+            for key in keys:
+                if key.get("kty") == "EC":
+                    return key
+        return None
+    except Exception as e:
+        print(f"Failed to retrieve JWKS (public keys) from Keycloak: {e}")
+        return None
+
+def _get_access_token_from_keycloak() -> str | None:
+    """Obtain an access token from Keycloak using a pre-authorized code."""
+    token_url = os.environ.get("KEYCLOAK_TOKEN_URL")
+    pre_authorized_code = os.environ.get("KEYCLOAK_PRE_AUTHORIZED_CODE")
+    client_id = os.environ.get("KEYCLOAK_CLIENT_ID")
+    client_secret = os.environ.get("KEYCLOAK_CLIENT_SECRET")
+
+    if not token_url or not pre_authorized_code or not client_id:
+        return None
+
+    body = {
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": pre_authorized_code,
+        "client_id": client_id,
+        "scope": "openid membership-credential",
+    }
+    if client_secret:
+        body["client_secret"] = client_secret
+
+    encoded_body = urlencode(body).encode("utf-8")
+    request = Request(token_url, data=encoded_body, method="POST")
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+
+    try:
+        with urlopen(request) as response:
+            response_body = response.read().decode("utf-8")
+            token_data = json.loads(response_body)
+            return token_data.get("access_token")
+    except (HTTPError, URLError) as exc:
+        print(f"Failed to obtain Keycloak access token: {exc}")
+        return None
+    except ValueError as exc:
+        print(f"Invalid JSON from Keycloak token endpoint: {exc}")
+        return None
+
+def _get_nonce_from_keycloak(access_token: str) -> str | None:
+    """Get nonce from Keycloak using the acquired access token."""
+    nonce_url = os.environ.get("KEYCLOAK_NONCE_URL")
+    if not nonce_url:
+        return None
+    
+    request = Request(
+        nonce_url,
+        #data=json.dumps().encode("utf-8"),
+        method="POST",
+    )
+    
+    request.add_header("Authorization", f"Bearer {access_token}")
+
+    try:
+        with urlopen(request) as response:
+            response_body = response.read().decode("utf-8")
+            response_data = json.loads(response_body)
+            #print(f"DEBUG: 呼び出し元が受け取った c_nonce = '{response_data.get('c_nonce')}'")
+            return response_data.get("c_nonce")
+    except (HTTPError, URLError) as exc:
+        print(f"Failed to request Keycloak nonce: {exc}")
+        return None
+    except ValueError as exc:
+        print(f"Invalid JSON from Keycloak nonce endpoint: {exc}")
+        return None
+
+def _request_l1_from_keycloak(access_token: str, user_public_jwk: dict, user_private_key_pem: str, c_nonce: str) -> str | None:
+    """Request an L1 VC from Keycloak using the acquired access token."""
+    credential_url = os.environ.get("KEYCLOAK_CREDENTIAL_URL")
+    if not credential_url:
+        return None
+    
+    # 1. Dynamically generate Proof JWT (Proof-of-Possession spec for Keycloak 26)
+    # Include the raw public key (jwk) in the header
+    header = {
+        "alg": "ES256",
+        "typ": "openid4vci-proof+jwt",
+        "jwk": user_public_jwk
+    }
+    
+    # Include the target audience (aud) and the resolved c_nonce in the payload
+    issuer_url = os.environ.get("KEYCLOAK_ISSUER_URL")
+    if not issuer_url:
+        return None
+    payload_proof = {
+        "aud": issuer_url,
+        "nonce": c_nonce,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 300
+    }
+    
+    # Sign with the user's private key to create the Proof JWT
+    proof_jwt = jwt.encode(header, payload_proof, user_private_key_pem).decode('utf-8')
+
+    # 2. Construct request payload compliant with the latest OID4VCI (Keycloak 26) spec
+    payload = {
+        "credential_identifier": "membership-credential_0000",
+        "format": "dc+sd-jwt",
+        # Set Proof JWT inside the plural "proofs" array structure instead of directly sending "cnf"
+        "proofs": {
+            "jwt":[
+                proof_jwt
+            ]
+        }
+    }
+
+    request = Request(
+        credential_url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+    )
+    request.add_header("Content-Type", "application/json")
+    request.add_header("Authorization", f"Bearer {access_token}")
+
+    try:
+        with urlopen(request) as response:
+            response_body = response.read().decode("utf-8")
+            response_data = json.loads(response_body)
+            # DEBUG: Log the raw credential response JSON from Keycloak
+            #print(f"DEBUG: Keycloak Credential Response Body: {response_data}")
+            
+            # 1. Try retrieving the standard "credential" key first
+            cred = response_data.get("credential")
+            if cred:
+                return cred
+                
+            # 2. If not found, extract from the plural "credentials" array
+            creds_list = response_data.get("credentials")
+            if creds_list and isinstance(creds_list, list) and len(creds_list) > 0:
+                # If it is a dictionary, extract the nested "credential", otherwise return the raw string
+                first_cred = creds_list[0]
+                if isinstance(first_cred, dict):
+                    return first_cred.get("credential")
+                return first_cred
+                
+            # 3. Fallback: Return the raw response body if neither keys could be extracted
+            return response_body
+    except (HTTPError, URLError) as exc:
+        print(f"Failed to request Keycloak credential: {exc}")
+        return None
+    except ValueError as exc:
+        print(f"Invalid JSON from Keycloak credential endpoint: {exc}")
+        return None
+
+
 
 def main():
     banner("Autonomous (3-Layer) Purchase Flow")
@@ -83,28 +260,52 @@ def main():
     agent = get_agent_keys()
     merchant = get_merchant_keys()
 
+    keycloak_l1 = None
+    access_token = _get_access_token_from_keycloak()
+    if access_token is not None:
+        c_nonce = _get_nonce_from_keycloak(access_token)
+        keycloak_l1 = _request_l1_from_keycloak(access_token, user.public_jwk, user.private_key, c_nonce)
+        if keycloak_l1:
+            role_log("issuer", "Loaded external L1 from Keycloak via pre-authorized flow")
+    
+    external_issuer_public_key = None
+    external_issuer_jwk = _load_external_issuer_jwk()
+    if external_issuer_jwk is not None:
+        external_issuer_public_key = jwk_to_public_key(external_issuer_jwk)
+
     # ------------------------------------------------------------------
     # Step 1: Issuer creates L1 credential binding user's public key
     # ------------------------------------------------------------------
     step(1, "Issuer creates Layer 1 credential")
 
-    cred = IssuerCredential(
-        iss="https://www.mastercard.com",
-        sub="user-alice-001",
-        iat=now,
-        exp=now + 86400,
-        aud="https://wallet.example.com",
-        cnf_jwk=user.public_jwk,
-        email="alice@example.com",
-        pan_last_four="1234",
-        scheme="Mastercard",
-    )
-    l1 = create_layer1(cred, issuer.private_key)
+    if keycloak_l1:
+        l1_ser = keycloak_l1
+        l1 = decode_sd_jwt(l1_ser)
+        role_log("issuer", "Using external L1 from Keycloak")
+        role_log("issuer", f"  typ={l1.header.get('typ')}")
+        role_log("issuer", f"  vct={l1.payload.get('vct')}")
+        role_log("issuer", f"  cnf.jwk binds user key (kid={user.kid})")
+        if external_issuer_public_key is None:
+            role_log("issuer", "  Warning: no external issuer JWK provided; later verification will likely fail")
+        print_sd_jwt("issuer", "L1 SD-JWT", l1_ser)
+    else:
+        cred = IssuerCredential(
+            iss="https://www.mastercard.com",
+            sub="user-alice-001",
+            iat=now,
+            exp=now + 86400,
+            aud="https://wallet.example.com",
+            cnf_jwk=user.public_jwk,
+            email="alice@example.com",
+            pan_last_four="1234",
+            scheme="Mastercard",
+        )
+        l1 = create_layer1(cred, issuer.private_key)
 
-    role_log("issuer", f"Created L1: {len(l1.disclosures)} selective disclosure (email)")
-    role_log("issuer", f"  typ={l1.header['typ']}, vct={l1.payload['vct']}")
-    role_log("issuer", f"  cnf.jwk binds user key (kid={user.kid})")
-    print_sd_jwt("issuer", "L1 SD-JWT", l1.serialize())
+        role_log("issuer", f"Created L1: {len(l1.disclosures)} selective disclosure (email)")
+        role_log("issuer", f"  typ={l1.header['typ']}, vct={l1.payload['vct']}")
+        role_log("issuer", f"  cnf.jwk binds user key (kid={user.kid})")
+        print_sd_jwt("issuer", "L1 SD-JWT", l1.serialize())
 
     # ------------------------------------------------------------------
     # Step 2: User creates L2 mandate with constraints + agent delegation
@@ -303,15 +504,29 @@ def main():
     l1_parsed = decode_sd_jwt(l1.serialize())
     l2_checkout_parsed = decode_sd_jwt(l2_checkout_only)
 
-    merchant_result = verify_chain(
-        l1_parsed,
-        l2_checkout_parsed,
-        l3_checkout=l3b,
-        issuer_public_key=issuer.public_key,
-        l1_serialized=l1.serialize(),
-        l2_serialized=l2_ser,
-        l2_checkout_serialized=l2_checkout_ser,
-    )
+    #issuer_verify_key = external_issuer_public_key if external_issuer_public_key is not None else issuer.public_key
+    
+    if keycloak_l1:
+        merchant_result = verify_chain(
+            l1_parsed,
+            l2_checkout_parsed,
+            l3_checkout=l3b,
+            issuer_public_key=external_issuer_public_key,
+            l1_serialized=keycloak_l1,
+            l2_serialized=l2_ser,
+            l2_checkout_serialized=l2_checkout_ser,
+            expected_l1_vct="membership-credential",
+        )
+    else:
+        merchant_result = verify_chain(
+            l1_parsed,
+            l2_checkout_parsed,
+            l3_checkout=l3b,
+            issuer_public_key=issuer.public_key,
+            l1_serialized=l1.serialize(),
+            l2_serialized=l2_ser,
+            l2_checkout_serialized=l2_checkout_ser,
+        )
     role_log("merchant", f"Checkout-side chain valid: {merchant_result.valid}")
     role_log("merchant", f"  L2 checkout disclosed: {merchant_result.l2_checkout_disclosed}")
     role_log("merchant", f"  L2 payment disclosed: {merchant_result.l2_payment_disclosed}")
@@ -328,15 +543,27 @@ def main():
 
     l2_full_parsed = decode_sd_jwt(l2_ser)
 
-    network_result = verify_chain(
-        l1_parsed,
-        l2_full_parsed,
-        l3_payment=l3a,
-        issuer_public_key=issuer.public_key,
-        l1_serialized=l1.serialize(),
-        l2_serialized=l2_ser,
-        l2_payment_serialized=l2_payment_ser,
-    )
+    if keycloak_l1:
+        network_result = verify_chain(
+            l1_parsed,
+            l2_full_parsed,
+            l3_payment=l3a,
+            issuer_public_key=external_issuer_public_key,
+            l1_serialized=keycloak_l1,
+            l2_serialized=l2_ser,
+            l2_payment_serialized=l2_payment_ser,
+            expected_l1_vct="membership-credential",
+        )
+    else:
+        network_result = verify_chain(
+            l1_parsed,
+            l2_full_parsed,
+            l3_payment=l3a,
+            issuer_public_key=issuer.public_key,
+            l1_serialized=l1.serialize(),
+            l2_serialized=l2_ser,
+            l2_payment_serialized=l2_payment_ser,
+        )
     role_log("network", f"Chain valid: {network_result.valid}")
 
     constraint_result = None

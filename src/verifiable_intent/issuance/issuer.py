@@ -13,6 +13,7 @@ def create_layer1(
     credential: IssuerCredential,
     issuer_private_key: ec.EllipticCurvePrivateKey,
     kid: str = "mastercard-issuer-key-1",
+    typ: str = "sd+jwt",
 ) -> SdJwt:
     """Create a Layer 1 Issuer SD-JWT.
 
@@ -32,7 +33,7 @@ def create_layer1(
 
     header = {
         "alg": "ES256",
-        "typ": "sd+jwt",
+        "typ": typ,
         "kid": kid,
     }
 
