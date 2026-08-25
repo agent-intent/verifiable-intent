@@ -1,7 +1,7 @@
 # Verifiable Intent — Wallet State Attestation Constraint Proposal
 
 **Type identifier**: `environment.wallet_state`
-**Version**: 0.6.5-draft
+**Version**: 0.7-draft
 **Status**: Draft / Proposed for Registration
 **Date**: 2026-05-06
 **Author**: Douglas Borthwick (InsumerAPI)
@@ -234,7 +234,7 @@ agent MUST NOT proceed on uncertainty.
 | `type` | string | Yes | MUST be `"environment.wallet_state"` |
 | `attestation_url` | string (HTTPS URL) | Yes | Endpoint the verifier POSTs to in order to obtain a signed JWT attestation. MUST be an HTTPS URL. The response MUST be a JSON object containing a `jwt` field conforming to §4.1. |
 | `trusted_jwks` | string (HTTPS URL) | Yes | Issuer JWKS ([RFC 7517]) URL. MUST be an HTTPS URL. The verifier fetches this JWKS to obtain the signing public key. This field — not `attestation_url` — is the policy-layer trust anchor (see §6.3). |
-| `expected_kid` | string | Yes | The JWT `kid` header value the verifier MUST require. The verifier MUST locate the key in the fetched JWKS whose `kid` matches this value and use it for signature verification. |
+| `expected_kid` | string | No | OPTIONAL strict pin on the JWT `kid` header. When absent, the verifier selects the signing key from the set published at `trusted_jwks` by the JWT header `kid` (§4.2 Step 4). When present, the JWT header `kid` MUST equal this value. In both cases a JWT whose header `kid` is absent from the fetched key set MUST be rejected. |
 | `expected_issuer` | string | Yes | The JWT `iss` claim value the verifier MUST require. The verifier MUST reject attestations whose `iss` differs from this value. |
 | `subject_wallet` | string | Yes | The wallet address that MUST appear in the JWT `sub` claim. Binds the attestation to a specific payment source. |
 | `required_condition_hashes` | array of string | Yes | One or more condition hashes (hex strings) the JWT `conditionHash` array MUST contain. Every value in this list MUST be present in the attestation's `conditionHash` array. Extra hashes in the attestation are permitted. |
@@ -249,8 +249,10 @@ agent MUST NOT proceed on uncertainty.
 - `attestation_url` and `trusted_jwks` MUST use the `https` scheme. Non-HTTPS
   URLs MUST be rejected as a constraint violation (fail-closed; unencrypted
   attestation traffic is untrusted by definition).
-- `expected_kid` and `expected_issuer` MUST be non-empty strings. Empty strings
-  MUST be treated as malformed and rejected.
+- `expected_issuer` MUST be a non-empty string. An empty string MUST be treated
+  as malformed and rejected. `expected_kid` is OPTIONAL; when present it MUST be
+  a non-empty string, and an empty string MUST be treated as malformed and
+  rejected.
 - `subject_wallet` MUST be a non-empty string. No address-format validation is
   performed by this constraint — the constraint is chain-agnostic and delegates
   address semantics to the attestation issuer.
@@ -299,7 +301,7 @@ object containing a `jwt` field whose value is a compact-serialized JWS
 |-------|------|-------------|
 | `alg` | string | Signing algorithm identifier. MUST be a named JWS algorithm per §4.7 (Algorithm Agility). For `environment.wallet_state`, the MUST-implement algorithm is `ES256`. |
 | `typ` | string | MUST be `"JWT"`. |
-| `kid` | string | Key identifier. MUST match `expected_kid` in the constraint. |
+| `kid` | string | Key identifier. MUST resolve to a key in the set published at `trusted_jwks`. When the constraint carries `expected_kid`, MUST also equal that value. |
 
 **JWT payload — REQUIRED claims** (normative; used by the verification
 algorithm in §4.2):
@@ -356,8 +358,10 @@ function check_environment_wallet_state(C, now):
         return violation("Non-HTTPS attestation_url: fail-closed")
     if C.trusted_jwks does not start with "https://":
         return violation("Non-HTTPS trusted_jwks: fail-closed")
-    if C.expected_kid is empty or C.expected_issuer is empty:
-        return violation("expected_kid/expected_issuer must be non-empty")
+    if C.expected_issuer is empty:
+        return violation("expected_issuer must be non-empty")
+    if C.expected_kid is present and C.expected_kid is empty:
+        return violation("expected_kid, when present, must be non-empty")
     if C.subject_wallet is empty:
         return violation("subject_wallet must be non-empty")
     if length(C.required_condition_hashes) == 0:
@@ -382,7 +386,9 @@ function check_environment_wallet_state(C, now):
 
     # Step 3 — Decode JWT header and verify kid
     let header = jwt_header(jwt)
-    if header.kid != C.expected_kid:
+    if header.kid is absent or empty:
+        return violation("JWT header carries no kid: fail-closed")
+    if C.expected_kid is present and header.kid != C.expected_kid:
         return violation("JWT kid does not match expected_kid: fail-closed")
 
     # Step 4 — Fetch JWKS and locate signing key
@@ -439,6 +445,9 @@ value in their execution audit trail. This enables post-hoc verification that
 the wallet state on which a decision was made was a legitimate, signed
 attestation — not a spoofed or replayed response.
 
+The verifier SHOULD report the `kid` actually used for signature verification
+in its per-member diagnostic output (§5.4).
+
 ### 4.3 `pass=false` Handling
 
 The attestation issuer may return a valid, signed attestation with `pass:
@@ -473,7 +482,6 @@ Checkout mandate constraint requiring the source wallet to hold at least
   "type": "environment.wallet_state",
   "attestation_url": "https://api.insumermodel.com/v1/attest",
   "trusted_jwks": "https://api.insumermodel.com/.well-known/jwks.json",
-  "expected_kid": "insumer-attest-v1",
   "expected_issuer": "https://api.insumermodel.com",
   "subject_wallet": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
   "required_condition_hashes": [
@@ -488,7 +496,7 @@ Checkout mandate constraint requiring the source wallet to hold at least
         "chainId": 1,
         "contractAddress": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
         "decimals": 6,
-        "threshold": 1
+        "threshold": "1"
       }
     ],
     "format": "jwt"
@@ -514,7 +522,6 @@ mandate, both MUST be satisfied before L3:
       "type": "environment.wallet_state",
       "attestation_url": "https://api.insumermodel.com/v1/attest",
       "trusted_jwks": "https://api.insumermodel.com/.well-known/jwks.json",
-      "expected_kid": "insumer-attest-v1",
       "expected_issuer": "https://api.insumermodel.com",
       "subject_wallet": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
       "required_condition_hashes": [
@@ -524,7 +531,7 @@ mandate, both MUST be satisfied before L3:
       "attestation_request_body": {
         "wallet": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
         "conditions": [
-          { "type": "token_balance", "chainId": 1, "contractAddress": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "decimals": 6, "threshold": 1 }
+          { "type": "token_balance", "chainId": 1, "contractAddress": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "decimals": 6, "threshold": "1" }
         ],
         "format": "jwt"
       }
@@ -1018,7 +1025,7 @@ revision.
 
 [InsumerAPI](https://api.insumermodel.com) is the reference implementation
 of a conformant wallet-state attestation issuer for this constraint type. It
-evaluates boolean conditions against live on-chain state across 33 chains and
+evaluates boolean conditions against live on-chain state across 38 chains and
 returns ES256-signed JWTs that conform to the abstract interface defined in
 §4.1.
 
@@ -1033,26 +1040,37 @@ returns ES256-signed JWTs that conform to the abstract interface defined in
 | AI agent discovery | `GET /llms.txt` |
 | Signing algorithm | ES256 (RFC 7518) via JOSE (`jose` npm package) |
 | JWT TTL | 1800 seconds (`exp = iat + 1800`) |
-| Key curve | P-256 (`alg: ES256`, `kty: EC`, `crv: P-256`, `kid: insumer-attest-v1`) |
-| Supported chains | 33 — all major EVM chains, Solana, XRPL, Bitcoin, and additional chains documented in `/openapi.yaml` |
+| Key curve | P-256 (`alg: ES256`, `kty: EC`, `crv: P-256`) |
+| Supported chains | 38 — 32 EVM chains plus Solana, XRP Ledger, Bitcoin, Tron, Stellar, and Sui; full enumeration in `/openapi.yaml` |
 
 ### 7.2 Condition Hash Canonicalization
 
 The reference issuer computes condition hashes as:
 
 ```
-conditionHash = "0x" + sha256(canonical_json(evaluated_condition))
+conditionHash = "0x" + sha256(canonical_serialization(evaluatedCondition))
 ```
 
-where `canonical_json` is `JSON.stringify` with object keys sorted
-lexicographically. The `evaluatedCondition` object contains the normalized
-form of the condition as evaluated (e.g., `{ type, chainId, contractAddress,
-operator, threshold, decimals }` for a `token_balance` condition).
+The `evaluatedCondition` object is the **normalized** form of the condition as
+the issuer evaluated it. Normalization is issuer-side and may populate fields
+the requester did not supply — token decimals detected from the contract, a
+defaulted comparison operator, a canonicalized currency code. The hash is a
+fingerprint of that normalized rule alone: it does not depend on the wallet,
+the outcome, or any value read from chain at evaluation time.
 
-Mandate issuers that need to precompute `required_condition_hashes` for
-constraints targeting InsumerAPI MUST use this same canonicalization. The
-full `evaluatedCondition` schema per condition type is documented in the
+The exact serialization and the field set are issuer-published and are
+versioned with the issuer's signing-key generation; the authoritative
+definition for each generation is the
 [InsumerAPI OpenAPI spec](https://api.insumermodel.com/openapi.yaml).
+
+Because normalization is issuer-side, a mandate issuer cannot in general
+derive these values from its own inputs. A mandate issuer populating
+`required_condition_hashes` MUST obtain the hash for each intended condition
+from the attestation issuer — for example by requesting one attestation over
+the intended conditions and reading the `conditionHash` values it returns —
+and MUST NOT assume a locally computed hash will match. Because the hash is a
+pure rule fingerprint, a value obtained this way is stable for that rule and
+binds the mandate before any operative attestation exists.
 
 Other conformant issuers MAY use a different condition hash algorithm
 provided it is collision-resistant and documented. The constraint's
@@ -1088,7 +1106,13 @@ issuance step is required.
 
 ### 7.5 Live JWKS
 
-Verified 2026-04-15:
+The following is a point-in-time illustration, not the trust boundary. The
+trust boundary is the key set fetched from `trusted_jwks` at verification
+time; the set changes without notice as keys are added or rotated. Verifiers
+MUST select by the JWT header `kid` within the fetched set and MUST NOT assume
+the set has one member.
+
+Fetched 2026-08-25:
 
 ```json
 {
@@ -1101,6 +1125,24 @@ Verified 2026-04-15:
       "use": "sig",
       "alg": "ES256",
       "kid": "insumer-attest-v1"
+    },
+    {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "JtHPhDPnv8AfP0JSlGutxbOlxreV2Chey27Z76q3V2c",
+      "y": "kn34HaxVSJfn8NxwNEBjjLkcrM_GDw1lgnqyADGuc4c",
+      "use": "sig",
+      "alg": "ES256",
+      "kid": "insumer-attest-v2"
+    },
+    {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "JtHPhDPnv8AfP0JSlGutxbOlxreV2Chey27Z76q3V2c",
+      "y": "kn34HaxVSJfn8NxwNEBjjLkcrM_GDw1lgnqyADGuc4c",
+      "use": "sig",
+      "alg": "ES256",
+      "kid": "insumer-trust-v2"
     }
   ]
 }
@@ -1160,7 +1202,7 @@ async function checkWalletStateConstraint(constraint, now = new Date()) {
       issuer: expected_issuer,
       subject: subject_wallet,
     });
-    if (protectedHeader.kid !== expected_kid) {
+    if (expected_kid !== undefined && protectedHeader.kid !== expected_kid) {
       throw new Error(`kid mismatch: ${protectedHeader.kid} != ${expected_kid}`);
     }
     payload = p;
@@ -1205,7 +1247,7 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
     """
     attestation_url = constraint["attestation_url"]
     trusted_jwks = constraint["trusted_jwks"]
-    expected_kid = constraint["expected_kid"]
+    expected_kid = constraint.get("expected_kid")
     expected_issuer = constraint["expected_issuer"]
     subject_wallet = constraint["subject_wallet"]
     required_condition_hashes = constraint["required_condition_hashes"]
@@ -1239,9 +1281,12 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
     # Verify signature (jose handles iss, sub, exp, kid → JWK lookup)
     try:
         unverified_header = jose_jwt.get_unverified_header(token)
-        if unverified_header.get("kid") != expected_kid:
+        header_kid = unverified_header.get("kid")
+        if not header_kid:
+            raise ValueError("JWT header carries no kid")
+        if expected_kid is not None and header_kid != expected_kid:
             raise ValueError("kid mismatch")
-        key = next(k for k in jwks["keys"] if k["kid"] == expected_kid)
+        key = next(k for k in jwks["keys"] if k["kid"] == header_kid)
         payload = jose_jwt.decode(
             token, key, algorithms=[key["alg"]],
             issuer=expected_issuer, subject=subject_wallet,
@@ -1319,6 +1364,7 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.7-draft | 2026-08-25 | **Generalises signing-key discovery, condition-hash guidance, and threshold encoding to the reference issuer's current published surface.** The reference issuer publishes more than one signing key and encodes token thresholds as canonical decimal strings; this revision broadens the specification to describe that surface directly. **(1) §4 `expected_kid` generalised from REQUIRED to OPTIONAL** across eight touchpoints — the §4 field row, the structural-validation bullet, the §4.1 JWT-header `kid` row, §4.2 Steps 1 and 3, the §5.4 error table, and both reference verifiers (§7.6 JavaScript, §7.7 Python), which now treat the pin as conditional and select the signing key by the JWT header `kid`. Key discovery is now expressed as selection within the key set published at `trusted_jwks`, using the JWT header `kid`; `expected_kid` remains available as a strict pin for deployments that want one, and its §4.8 scope classification is unchanged. This admits issuers that publish several keys and issuers that rotate, without requiring a new mandate per key. **§4.2 Step 4 is unchanged** — its existing key-set lookup already expresses the selection rule, so the generalisation is carried entirely by making the Step 3 pin conditional. Adds a SHOULD in §4.2 that the verifier report the `kid` used in its §5.4 diagnostic output, adds a §5.4 row for a JWT header carrying no `kid`, and the two §4 constraint examples now show the default discovery path. **(2) §7.2 and the Appendix D canonicalization row strengthened.** `evaluatedCondition` is now described as the issuer-*normalized* form of the condition, and the section states which values normalization supplies — token decimals detected from the contract, a defaulted comparison operator, a canonicalized currency code — none of which a mandate issuer holds. Serialization and field set are described as issuer-published and versioned with the issuer's signing-key generation, with `openapi.yaml` named as the authoritative definition for each generation, so the section stays correct across future generations rather than restating one. Guidance for populating `required_condition_hashes` is strengthened accordingly: a mandate issuer obtains each `conditionHash` from the attestation issuer — for example by requesting one attestation over the intended conditions and reading the returned values — rather than deriving it locally. Because the hash is a pure rule fingerprint, independent of wallet and outcome, a value obtained this way is stable for that rule and binds the mandate before any operative attestation exists. The existing provisions that other conformant issuers MAY use a different algorithm, and that `required_condition_hashes` values are opaque to the verifier (§4.2 Step 10), are unchanged. **(3) Request examples aligned to canonical decimal-string thresholds** at the two §4 constraint examples (`"threshold": "1"`), matching the encoding documented in `openapi.yaml`. The Appendix A request is a dated capture and is reproduced unchanged. `"decimals": 6` is retained: it remains an OPTIONAL request field, auto-detected from the contract when omitted. **(4) §7.5 expanded to the full published key set** (three keys), re-dated 2026-08-25, and captioned to state that the trust boundary is the set fetched from `trusted_jwks` at verification time rather than any published snapshot. §7.1's key-curve row now describes the curve alone, with key identity carried by discovery. **(5) Appendix D**: the signing-key row now describes discovery — keys published at the JWKS endpoint and selected by header `kid`, with no single identifier held out as permanent — so it remains accurate across rotations; coverage updated to 38 chains (32 EVM chains plus Solana, XRP Ledger, Bitcoin, Tron, Stellar, and Sui) per `openapi.yaml` `ChainId`. **(6) Chain coverage updated to 38** at §7.1 prose, the §7.1 Supported-chains row, and the Appendix D coverage row. **(7) Appendix A**: agent-provisioning prose enumerates all three supported payment assets (`USDC, USDT, or BTC`), matching §7.1 and §7.4; and a note placed above the capture records the whole of it — request and vectors alike — as a dated v1-generation capture reproduced unchanged, noting that the recorded `conditionHash` is the value that generation returned for the request shown. **Unchanged:** the Appendix A capture, request and vectors alike; JWT TTL 1800 s; §7.1 and §7.4 payment-method prose; all endpoint paths, API base, and JWKS path; ES256/P-256; Appendix C register discipline; and the dated v0.6.4 changelog row, which is a historical record and is not rewritten. Ratio and invariant condition types remain out of scope — adding them is specification expansion rather than alignment with the current published surface. Document header advances `0.6-draft` to `0.7-draft`: the patch-level convention affirmed at v0.5.1 / v0.5.3 / v0.6.1 / v0.6.2 / v0.6.3 / v0.6.4 is conditioned on no §4 schema changes, and this revision changes a §4 field's requiredness and generalises the §4.2 verification algorithm. No sibling-mirror coordination applies: every touchpoint is per-type-trust-root-mechanism-bound or per-type-evaluation-mechanism-bound under §4.8, and `environment.market_state` uses an RFC 8615 key registry and `oracle_public_key_id` rather than a JOSE `kid` binding, so nothing here is portable to PR #9. Sole-authored. |
 | 0.6.5-draft | 2026-05-06 | **§4.7 algorithm-deprecation discipline (family-wide + per-type)** — adds family-wide algorithm-deprecation prose to §4.7 mirroring `draft-borthwick-msebenzi-environment-state-00 v0.2-draft` §4.3 family-wide SHOULD (type specification authors SHOULD specify a deprecation mechanism for the type's MUST-implement algorithm before that algorithm is needed, including conditions, timeline for verifier migration, and backward-compatibility guarantees during the transition). Adds per-type `environment.wallet_state` deprecation mechanism: **conditions** (NIST / IETF JOSE WG / RFC 8725 update guidance, or cryptographic break in the literature affecting the type's threat model), **timeline** (≥12-month verifier-migration window from minor-version revision publication; parallel verification during window; verifier rejection of deprecated algorithm after the window's end date), **backward compatibility** (mandate-issuer migration upon attestation-issuer JWKS readiness; verifier-side detection via standard JWKS key-set inspection). Updates §4.7 PR #9 coordination Note to reflect PR #9 §4.7 as the verbatim-portable target (PR #9's algorithm-agility section sits at §4.7); deprecation mechanism block joins table rows in the per-type-swap surface; family-wide prose (algorithm-agnostic policy paragraph, single-algorithm lock-in paragraph, family-wide deprecation paragraph) is verbatim-portable. Closes §3.4(5) family-membership obligation under the I-D family-definition contract. Document header stays at `0.6-draft` per patch-level convention established at v0.5.1 and reaffirmed at v0.5.3 / v0.6.1 / v0.6.2 / v0.6.3 / v0.6.4. No algorithm changes; no security-model changes; no §4 schema changes; no InsumerAPI-side code changes required. Co-drafted with LembaGang (Headless Oracle); family-wide prose remains verbatim-portable to `environment.market_state` §4.7 on PR #9 per the existing lockstep pattern. |
 | 0.6.4-draft | 2026-05-03 | **Appendix D: Implementation Status (RFC 6982)** — new appendix listing the running-code implementations of the `environment.*` family. D.1 records InsumerAPI as the running implementation of `environment.wallet_state` — endpoints, License row (proprietary, copyright Douglas Borthwick), ES256/P-256 signing per §4.7 MUST-implement, kid `insumer-attest-v1`, 1800-second JWT TTL, 33-chain coverage (30 EVM + Solana + XRPL + Bitcoin), USDC/USDT/BTC agent-native key provisioning at `POST /v1/keys/buy` per §7.4, condition hash canonicalization per §7.2, and conformance pointer set for §4.1 / §4.2 / §4.6 / §4.7 / §4.8 / §5.5 / §6.5 / §6.8 / §6.9. Refers to §7 for full reference-implementation prose rather than duplicating. D.2 records Headless Oracle as the running implementation of the sibling `environment.market_state` constraint type ([PR #9](https://github.com/agent-intent/verifiable-intent/pull/9)) — endpoints, Ed25519 signing per `environment.market_state` §4.7, 28-exchange coverage, reference verifier; listed for `environment.*` family completeness, with the canonical Implementation Status appendix for `environment.market_state` belonging in PR #9 (editor's call on Michael Msebenzi / LembaGang's side). D.3 disclaimer states that listing is not endorsement and verifiers MUST independently verify per §4.2 regardless of Appendix D listing. Per RFC 6982 §2, the appendix is intended to be removed by the RFC Editor before any final standards-track publication; the GitHub history of this Internet-Draft retains it permanently. **§7.1 + §7.4 source-of-truth alignment**: `POST /v1/keys/buy` payment methods updated from "USDC or BTC" / "USDC (or BTC)" to "USDC, USDT, or BTC" matching production behavior (`openapi.yaml` PaymentChainId: EVM chains and Solana accept USDC and USDT; Bitcoin accepts BTC). §7.4 prose around agent-key-bootstrap rationale generalised from "the authority to spend USDC" to "on-chain spending authority" — drops the canonical-token enumeration mismatch with the §7.4 endpoint enumeration above it without losing the rhetorical argument. Document header stays at `0.6-draft`; v0.6.4 is a patch-level refinement adding an informative appendix and aligning §7 prose with production — no algorithm changes, no security-model changes, no §4 schema changes, no InsumerAPI-side code changes required. Sibling-mirror coordination: independent of the parallel Appendix D landing on the `environment.market_state` side per LembaGang's [`LembaGang/verifiable-intent` commit `21a156cd`](https://github.com/LembaGang/verifiable-intent/commit/21a156cd) anchor (*"a parallel Appendix D on PR #22 is the editor's call on the environment.wallet_state side and is expected to land independently on Douglas Borthwick's timing"*). |
 | 0.6.3-draft | 2026-04-23 | **PR #23 field-alignment-v2 propagation** — first coordination commit following Mastercard's [PR #23 merge](https://github.com/agent-intent/verifiable-intent/pull/23) (Reda, Apr 20 2026), mirroring LembaGang's [PR #9 v0.5.6-draft](https://github.com/agent-intent/verifiable-intent/pull/9) propagation commit [`68f4db4`](https://github.com/agent-intent/verifiable-intent/commit/68f4db4) per LembaGang's Apr 23 08:59 UTC handoff note on [PR #9 comment 4303094991](https://github.com/agent-intent/verifiable-intent/pull/9#issuecomment-4303094991) (*"The parallel `environment.wallet_state` RFC lives on a separate file and will propagate its own PR #23 touchpoints independently. No byte-identical mirror is required for this patch."*). Eight touchpoints in `spec/environment-wallet-state.md`, grouped into five categories matching the PR #9 propagation shape. (1) **VCT version suffix** `mandate.checkout.open` → `mandate.checkout.open.1` — 3 occurrences: §2.2 dual-mode prose, §4 Appears In, §4.5 composition example (*NYSE must be open and source wallet must still hold ≥1 USDC*). (2) **VCT version suffix** `mandate.payment.open` → `mandate.payment.open.1` — 2 occurrences: §2.2 dual-mode prose, §4 Appears In. (3) **Constraint type pluralisation** `mandate.checkout.allowed_merchant` → `mandate.checkout.allowed_merchants` — 1 occurrence in §4.5 composition example. (4) **Constraint field generalisation** `allowed_merchants` → `allowed` — 1 occurrence in §4.5 composition example, paired with the pluralisation above. (5) **§5.5 Block 3 prose collapse** `(mandate.*, payment.*)` → `(mandate.*)` — 1 occurrence reflecting PR #23's move of payment constraints under the `mandate.*` prefix. No semantic changes to `environment.wallet_state` itself. Additive PR #23 fields (`match_mode`, `constraint_policy`, `risk_data`) are out of scope — they belong to transactional constraint types, not the `environment.*` family. Document header stays at `0.6-draft` per patch-level convention established at v0.5.1 and reaffirmed at v0.5.3 / v0.6.1 / v0.6.2; v0.6.3 is a patch-level refinement matching LembaGang's PR #9 v0.5.5 → v0.5.6 patch bump for identical propagation work. No algorithm changes; no security-model changes; no InsumerAPI-side code changes required. Sole-authored propagation mirrors LembaGang's sole-authored `Signed-off-by:` trailer discipline on `68f4db4` — no `Co-Authored-By:` trailers on either side. |
@@ -1341,6 +1387,12 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
 These test vectors allow constraint verifier implementors to validate their
 attestation verification logic against a known-good signed receipt from the
 reference implementation (InsumerAPI, §7).
+
+The request and vectors below are a dated capture from a 2026-04-15 live call,
+retained as a historical record and reproduced unchanged. They were produced
+under a v1-generation signing key, and the recorded `conditionHash` is the value
+that generation returned for the request shown. The current published key set is
+at §7.5, and the threshold encoding current keys expect is in `openapi.yaml`.
 
 **Request** (POST `https://api.insumermodel.com/v1/attest`):
 
@@ -1408,7 +1460,7 @@ it against the JWKS above using any standard JOSE library. Human developers
 can get a free-tier key in ~10 seconds at
 [`https://insumermodel.com/developers/`](https://insumermodel.com/developers/);
 autonomous agents can self-provision via `POST /v1/keys/buy` using an
-on-chain USDC or BTC payment (see §7.4). A working end-to-end verifier is
+on-chain USDC, USDT, or BTC payment (see §7.4). A working end-to-end verifier is
 published at
 [`github.com/douglasborthwick-crypto/insumer-examples`](https://github.com/douglasborthwick-crypto/insumer-examples).
 
@@ -1423,7 +1475,8 @@ published at
 | Network timeout / DNS failure | 2 | `"Attestation fetch failed: ... — fail-closed"` | Do not proceed |
 | HTTP 4xx / 5xx from issuer | 2 | `"Attestation fetch failed: HTTP {N} — fail-closed"` | Do not proceed |
 | Response missing `jwt` field | 2 | `"Attestation response missing jwt field: fail-closed"` | Do not proceed |
-| `kid` mismatch | 3 | `"JWT kid does not match expected_kid: fail-closed"` | Do not proceed |
+| JWT header carries no `kid` | 3 | `"JWT header carries no kid: fail-closed"` | Do not proceed |
+| `kid` mismatch (when `expected_kid` present) | 3 | `"JWT kid does not match expected_kid: fail-closed"` | Do not proceed |
 | JWKS unreachable | 4 | `"JWKS unreachable: fail-closed"` | Do not proceed |
 | `kid` not found in JWKS | 4 | `"Signing key not found in JWKS: fail-closed"` | Do not proceed |
 | JWT signature invalid | 5 | `"JWT signature verification failed: fail-closed"` | Do not proceed; alert operator |
@@ -1509,11 +1562,11 @@ This appendix records the running-code implementations of `environment.wallet_st
 | Attestation endpoint | `POST https://api.insumermodel.com/v1/attest` (requires `X-API-Key`) |
 | JWKS endpoint | `GET https://api.insumermodel.com/.well-known/jwks.json` (RFC 7517) |
 | Signing algorithm | ES256 / P-256 (RFC 7518), per §4.7 MUST-implement |
-| Stable signing key id | `insumer-attest-v1` |
+| Signing key discovery | Keys are published at the JWKS endpoint above and selected by the JWT header `kid`. The published set carries more than one key identifier and changes without notice; no single identifier is guaranteed stable. |
 | Receipt format | ES256 JWT (RFC 7515) carrying the seven REQUIRED claims at §4.1 (`iss`, `sub`, `jti`, `iat`, `exp`, `pass`, `conditionHash`) plus the implementation-specific OPTIONAL claims at §7.3 (`results`, `blockNumber`, `blockTimestamp`) |
-| Condition hash canonicalization | `"0x" + sha256(canonical_json(evaluatedCondition))` with object keys sorted lexicographically, per §7.2 |
+| Condition hash canonicalization | SHA-256 over a canonical JSON serialization of the normalized `evaluatedCondition`, versioned with the signing-key generation; authoritative definition in `openapi.yaml`, per §7.2 |
 | JWT TTL | 1800 seconds (`exp = iat + 1800`) |
-| Coverage | 33 chains (30 EVM chains + Solana + XRPL + Bitcoin); full enumeration at [`https://api.insumermodel.com/openapi.yaml`](https://api.insumermodel.com/openapi.yaml) |
+| Coverage | 38 chains (32 EVM chains plus Solana, XRP Ledger, Bitcoin, Tron, Stellar, and Sui); full enumeration at [`https://api.insumermodel.com/openapi.yaml`](https://api.insumermodel.com/openapi.yaml) |
 | Agent-native key provisioning | `POST /v1/keys/buy` — no auth, wallet is identity, USDC/USDT/BTC on-chain payment, per §7.4 |
 | Reference verifiers | [InsumerAPI examples](https://github.com/douglasborthwick-crypto/insumer-examples) (end-to-end verification scripts); minimal constraint verifier (JavaScript, `jose`) at §7.6; fail-closed integration pattern (Python) at §7.7 |
 | OpenAPI spec | `GET https://api.insumermodel.com/openapi.yaml` |
