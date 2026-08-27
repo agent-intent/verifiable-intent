@@ -580,7 +580,7 @@ informative unless they contain an uppercase normative keyword.
 ### C.2 Rules for the `environment.*` family
 
 1. A verifier MUST treat a missing, malformed, unverifiable, stale, expired, or
-   negative price-integrity attestation as a violation.
+   negative `environment.*` attestation as a violation.
 2. A reference implementation listing MUST NOT be interpreted as provider
    exclusivity or endorsement.
 3. Future `environment.*` constraint types MUST declare their field scope,
