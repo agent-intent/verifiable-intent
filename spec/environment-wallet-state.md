@@ -1,9 +1,9 @@
 # Verifiable Intent — Wallet State Attestation Constraint Proposal
 
 **Type identifier**: `environment.wallet_state`
-**Version**: 0.7-draft
+**Version**: 0.8-draft
 **Status**: Draft / Proposed for Registration
-**Date**: 2026-05-06
+**Date**: 2026-09-08
 **Author**: Douglas Borthwick (InsumerAPI)
 **License**: Apache 2.0
 
@@ -171,7 +171,7 @@ attestation obtained at agent time may not reflect wallet state at verifier
 time. Verifiers MUST perform independent attestation verification, not rely on
 the agent's L3 claims about wallet state.
 
-**Layer 3 evidence field (RECOMMENDED)**: Agents SHOULD include a
+**Layer 3 evidence field**: Agents SHOULD include a
 `wallet_state_attestation` field in the Layer 3 mandate containing the full
 signed JWT. This provides a cryptographic audit record of the wallet state the
 agent observed when constructing L3. Verifiers MAY use this field to audit the
@@ -204,7 +204,7 @@ entry:
 
 | Type | Defined In | Version | Disclosure Form |
 |------|-----------|---------|-----------------|
-| `environment.wallet_state` | This document | 0.2-draft | property (full constraint) |
+| `environment.wallet_state` | This document | 0.8-draft | property (full constraint) |
 
 ---
 
@@ -461,8 +461,8 @@ guarantee is what makes the constraint load-bearing.
 ### 4.4 Attestation Staleness During Verification
 
 A verifier checking Layer 3 at time `T` MUST fetch a fresh attestation from
-`attestation_url` if the attestation the agent embedded in L3 (per §2.4
-RECOMMENDED field) is expired at time `T`. The verifier MUST apply the full
+`attestation_url` if the attestation the agent embedded in L3 (per the §2.4
+Layer 3 evidence field) is expired at time `T`. The verifier MUST apply the full
 verification algorithm (§4.2) to the freshly fetched attestation.
 
 If the fresh attestation shows `pass: false` (e.g., the wallet was drained
@@ -485,7 +485,7 @@ Checkout mandate constraint requiring the source wallet to hold at least
   "expected_issuer": "https://api.insumermodel.com",
   "subject_wallet": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
   "required_condition_hashes": [
-    "0xc938b71ac78df5843d6823dd78ee0a5b64dd56fa850984e954dd070285169444"
+    "0x7461826638a23862059da9474fa12054829f694020701491d660395b87df6132"
   ],
   "max_attestation_age": 300,
   "attestation_request_body": {
@@ -525,7 +525,7 @@ mandate, both MUST be satisfied before L3:
       "expected_issuer": "https://api.insumermodel.com",
       "subject_wallet": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
       "required_condition_hashes": [
-        "0xc938b71ac78df5843d6823dd78ee0a5b64dd56fa850984e954dd070285169444"
+        "0x7461826638a23862059da9474fa12054829f694020701491d660395b87df6132"
       ],
       "max_attestation_age": 300,
       "attestation_request_body": {
@@ -645,13 +645,55 @@ lifetime that algorithm provides.
   their JWKS at the trust-root URL declared by the constraint instance;
   verifiers detect issuer readiness via standard JWKS key-set inspection.
 
+**Post-quantum companion (reference implementation, additive).**
+Independently of the mechanism above, and without declaring a successor, the
+reference issuer has added a second signature: since 2026-09-01 every `/v1/attest` response
+carries, beside the ES256 signature, a companion signature under ML-DSA-65
+([FIPS 204] ML-DSA, not HashML-DSA; empty context), with the companion key
+published in the same JWKS as [RFC 9964] entries (`kty` `AKP`, `alg`
+`ML-DSA-65`) under their own `kid` values, appended after the EC entries.
+In every response the companion signature `pqSig` signs the post-quantum
+domain tag, a newline, and the exact classical preimage the classical `kid`
+selects; the JWT response additionally carries a second companion, `pqJwt`, a
+compact JWS verified over its own JWS Signing Input ([RFC 7515] §5.1). Neither changes what the classical
+signature covers. It is the issuer's own second signature over its own
+material; no other party's signature is a companion. Publication of the
+companion key in the JWKS is not the readiness signal described under
+Backward compatibility above; that signal has meaning only once a successor
+has been declared.
+
+This does not move the MUST-implement. `ES256` remains the algorithm every
+conformant verifier must support, and the §4.2 verification algorithm is
+defined solely over `jwt`, the §4.1 attestation. This revision declares no successor
+MUST-implement; the mechanism above is untouched. The companion is defined
+relative to a classical preimage and is not itself a candidate successor
+form: a successor, if ever declared, is declared under the mechanism above
+and carries its own preimage definition. The companion is additive: a
+verifier that ignores it verifies exactly as before. What follows is
+verifier-local policy layered above §4.2, which this specification does not
+define; the reference verifier `insumer-verify` (Appendix D.1) applies it as follows. A
+verifier that evaluates the companion reports it as an independent verdict
+with one of four values — `verified`, `refuted`, `absent`, `unverifiable` —
+rather than folding it into the §4.2 result; it treats a `refuted` result as
+a failed attestation, while `absent`
+and `unverifiable` fail only under a cutoff the verifier itself declares,
+compared with the verifier's clock at verification rather than with the
+attestation's `iat`, and never when an attestation is being read as evidence
+rather than acted upon. A companion `kid` that resolves to no key in the
+fetched set is `unverifiable`, not a pass and not a reason to select another
+key. The companion's wire fields are described at §7.3; the live key set at
+§7.5; the published test vectors and the cross-signed key binding at
+Appendix D.
+
 > **Note for PR #9 coordination**: This section is drafted as a standalone
 > block that can be adopted verbatim in `environment.market_state` §4.7
 > with the table rows and the per-type deprecation mechanism block swapped.
 > The family-wide prose (algorithm-agnostic policy paragraph,
 > single-algorithm lock-in paragraph, and family-wide deprecation paragraph)
 > is verbatim-portable. The intent is one family-wide question, one answer,
-> two specs.
+> two specs. The post-quantum companion paragraphs above are
+> `environment.wallet_state`-local reference-implementation prose and sit
+> outside the portable block; `environment.market_state` §4.7 is unaffected.
 
 ### 4.8 Field Scope Declaration
 
@@ -948,6 +990,14 @@ JWKS cache are independent. The `jti` cache TTL is bound by
 `max_attestation_age + 30s`; the JWKS cache TTL is bound by issuer cache
 directives. No cross-dependency.
 
+**Post-quantum companion.** The companion described at §4.7 does not
+strengthen the §4.2 decision taken within an attestation's 1800-second window, where
+the classical signature is the boundary. It protects records read later as
+evidence: an attestation whose companion verified in 2026 remains attributable
+to its issuer after a classical break, because a forger would then need both
+keys, and the cross-signed key binding (Appendix D.1) fixes which two keys
+those were.
+
 ### 6.9 Cross-Chain Temporal Consistency
 
 §6.7 addresses the adjacent-but-distinct concern of verifier↔issuer
@@ -1092,6 +1142,24 @@ These claims provide a chain-anchored audit trail. Verifiers MAY log them for
 audit but MUST NOT use them as a substitute for the `conditionHash` and `pass`
 checks defined in §4.2.
 
+**Post-quantum companion fields (since 2026-09-01; additive).** The
+companion described at §4.7 travels as siblings of the classical fields in
+the response object, not as claims inside the JWT. In every response,
+`pqSig` (base64, ML-DSA-65 signature) and `pqKid` sit beside `sig` and `kid`
+(the raw-format response's signature and key-identifier fields, documented in
+the OpenAPI spec). The JWT response additionally carries `pqJwt` beside `jwt`: a compact JWS
+whose header `alg` is `ML-DSA-65` and whose `kid` names the AKP entry,
+carrying the same claims as `jwt` and bound to it by `jti`, `exp` and `pass`.
+`pqJwt` is never sufficient on its own: the §4.1 attestation is `jwt`, and
+`ML-DSA-65` is in none of §4.7's supported sets for this type. The `pqSig`
+preimage is the domain tag `insumer.attestation.pq1`, a newline, and the
+classical preimage of the raw-format `sig`, documented in the OpenAPI spec and
+the published test vectors (Appendix D); `pqJwt` is verified as any compact
+JWS, over its own JWS Signing Input ([RFC 7515] §5.1), against the `AKP`
+entry its header `kid` names. Nothing in the
+§4.1 REQUIRED claims or the §4.2 algorithm changes; a verifier that reads
+only `jwt` is unaffected.
+
 ### 7.4 Agent-Native Key Provisioning
 
 The reference issuer supports fully autonomous key provisioning at
@@ -1112,7 +1180,11 @@ time; the set changes without notice as keys are added or rotated. Verifiers
 MUST select by the JWT header `kid` within the fetched set and MUST NOT assume
 the set has one member.
 
-Fetched 2026-08-25:
+Fetched 2026-09-08. Five entries over two keys: three EC entries on one
+P-256 key, then the two [RFC 9964] `AKP` entries of the post-quantum
+companion key (§4.7), appended last. A JWKS entry whose `kty` a verifier does
+not recognise is ignored during selection; it is not a malformed key set and
+not a reason to fail the fetch.
 
 ```json
 {
@@ -1143,6 +1215,20 @@ Fetched 2026-08-25:
       "use": "sig",
       "alg": "ES256",
       "kid": "insumer-trust-v2"
+    },
+    {
+      "kty": "AKP",
+      "alg": "ML-DSA-65",
+      "use": "sig",
+      "kid": "insumer-attest-pq1",
+      "pub": "lWQSprOGRxWovc9LfqqiQtO6yEnDWZulgxtidDL-c7ILBQQUZctXBnn-oIKaAS3YSnx6GmunP2pBzbGedSoOtuER9KEPquUfhAugTBj6vdY6khJG0B_GidYTLpsrAZF9mGC3axd9AZiWnv9_3DUw1JqKMtzKpbC_G4jFH2jlDxHze_TsNTTMFjVjO7nI_O-IxEmfomDVNgnwUWhUBsMMSt743y6KfuWzz8U_m3sgeRoUBOSrjf1Gm1cRoegBV7bMn3GIEGGGVJJrUVtAH0omTSpNCmntNhLGByg1ZQsVlpMR7aNzhdkhjun1eHO9NxysS4nAnTMxvpGVpJG1DExSZlmsmmbe8gFZYOHWZysEwvYzhWmTIsBS3U4QKckCFVac6GAMvpOLaUce3lXdC2JB4CyiK88ItIsZbok3fl5VMXtfQLm0Y2zjobkGBh51s_MQOWcTab3YRMgvawOrYYxxDNUQdjCwG_h8pBscpZO905PDhnBfY2jKVX7sdvh3BJUOXZ1kVhc939T8VsmtREXjPpUb5i3VAN5Is_VK9cAEfo26CiXMTD_evIoZzuLGUpzwexUqNDYMpTG2_jHpbD8hjtX_yiTqqL-mzGTT4TI6Gjix0G7wnDmgEoIep-xHK4aB9wcgnTgGxNyfD7EiwkwaseTN17e7PtDcKgDfYxZQr73oPMSEAh4ogy8iEWO0tNPQxBhb8NcJU_8Olotib9J-MwPuB2d6MTkmaNLTBZNaSkykkGwxAOw2o8QpobONzDnc4ndIHdVuz6vpLD6ZkySqqj4m0WDqv-zXUn9Ssr8fbajaAwwHjjTAkOcLxrmLfG7l8pGQq5f3-LzCdltjGjyzrvR8obwSiMjt5f3Vz0y_ClJ2DeHdcHldyT5kFxEtTpKxTvNN9qs7ZElE2WdTrk6rdwpikVw4BZ_YePfMVDzRH7ZOZSSdOs7fbXEf0PdpfuUbklmt3kWv2tg3jtR3te5kulXdKBEJ2NClRpBw0IwF72iEupX0Roo2EsygE65CYlOJX4scYKhkFa4rojiRoT7wvc1mMcxSIuBzl0mvkMo7c3UBmqLnOD-AwxH8ir4-A4f_sCWOYD0zztXG_yUBFq9jnD4zRsOcovh7IO2lSV-OOdR9CMaJ-GxlMoUiDYCN3emdTTGaROhPDlCTBkQhhKkNj-WpOwZ1j4abb1PnxcG4Oh-K1AM_AgLRC99dmM9lOMk3IW3Ti7hht5GJPXAHvPbDXeceU1nffstrrYIBkmQ1OqZTsq78E_s8B_HIszTAPOrGK5Fd_-vP9Def6Pi41dlOgPmkjsoRGUBLZD9oZS5q7Me3mE6Ee5jkaM4ZAXeCEn2HXj5dO4pMIxQWpiSgCsz7IOWA_o7VTSiVwQpkcEjU2n1ftmEF2Tk0IT_eTa3J5vYr-BnH3Ta1s79_ENs9z_5pgFntcmS9ilWAt6XluPAZwzTLmb6PCodkWPFZVPHRe354sXIS64RfjJ7h3Nzu-hOj_arlqzvZmEmwhm-5XDhrredJDfbuW9miIm0023ySz0MnHn1hIS7yn-0oqAkvDpyxu0b0I5Y3vbVsvAPLEnPHBfAtirhnCb9tcHGfYbcjoDrNJI9L4gTeMx30aL2y-wygBJYvzuEJ7qPnCBvFrPPIfirAzIgiuVc-v7ZtcgyC9pQ_ZosCaNbAO-Mjj765siRZOT_5zEZurw521EJxHnG9IxQgikWbp3zNUCCIxDBbc07chhnYf6NPyMHJ9CfBqnV8dMP_Zz_9xTBDTS7dz5tbTO75FFCqWEtNXYmHsUV6xe6EXUTfH3x9RIQo-VUzgzi8-WQguSP-m0rQGF3jTa3x6MsAKzMOJfSgHo0mblhozEAzrSeYdI3S-YMtQB9-UQY2Ze3uXa95Cysg3wnJYcv3ucDxPdApwNGFjStvd5i6W6uG1dA3iR4hOfjzNcmVJ5E2egExx2EJXMosg9uvHRc8nx02doM9RQzFZ4zO9Lpf_xq2GqBww1MmiUAQhRWWrYHvwE838X_ews7pRCbmA6_8gVsnmF9CyQmWeDCdHbyNb5yqQZMWqSQcemJwDx4C-GuggDqrvHpeW6nOJ5dCTiYUl_pV2gCrsnHvPmNeL597_LEh_rppEy_gJSDkUFnNxH9t3GEycHFX6UYsgs11TFAtEmaYluacHD7sEZr8PVyYcenKCquI9xvYjMcfSZrjC7KFeKbIs8WpXhXP1SBznQQMOVlGzzI00-dsWt_OfzjDfQEqlJFb65Huq0IBw2-hzUB2LDdEUWOamIQlgg2m2kutZdaydUSQGnP0DX58ouJnetOtNNyuojRPCkwaRwjUQhL_KcGAmvanp3kpFjM1eLVPBYnTmLyRkH4S5wxHYRGDZcXQ3dIQzVR9bJ_ezD_zwUhhrL4vV80RbOXPF5MWdxG06PCxNJGahNzolLwOt7QdsZufEO2UCgagGOyvDL-4TOB5oAKDaBpl4BCflok5no7scrOgjqPfXu76OWeCdXJ2qfl-QkIbJFXOw2M7k41SlNPq9nUuTL5G_t6SeNV3gIrefym8aTlRENHTpHNu1I6pL16hK-cdxFXSH8sle8EcpRAsISu0d5I2nDlHuAA0nhcASug"
+    },
+    {
+      "kty": "AKP",
+      "alg": "ML-DSA-65",
+      "use": "sig",
+      "kid": "insumer-trust-pq1",
+      "pub": "lWQSprOGRxWovc9LfqqiQtO6yEnDWZulgxtidDL-c7ILBQQUZctXBnn-oIKaAS3YSnx6GmunP2pBzbGedSoOtuER9KEPquUfhAugTBj6vdY6khJG0B_GidYTLpsrAZF9mGC3axd9AZiWnv9_3DUw1JqKMtzKpbC_G4jFH2jlDxHze_TsNTTMFjVjO7nI_O-IxEmfomDVNgnwUWhUBsMMSt743y6KfuWzz8U_m3sgeRoUBOSrjf1Gm1cRoegBV7bMn3GIEGGGVJJrUVtAH0omTSpNCmntNhLGByg1ZQsVlpMR7aNzhdkhjun1eHO9NxysS4nAnTMxvpGVpJG1DExSZlmsmmbe8gFZYOHWZysEwvYzhWmTIsBS3U4QKckCFVac6GAMvpOLaUce3lXdC2JB4CyiK88ItIsZbok3fl5VMXtfQLm0Y2zjobkGBh51s_MQOWcTab3YRMgvawOrYYxxDNUQdjCwG_h8pBscpZO905PDhnBfY2jKVX7sdvh3BJUOXZ1kVhc939T8VsmtREXjPpUb5i3VAN5Is_VK9cAEfo26CiXMTD_evIoZzuLGUpzwexUqNDYMpTG2_jHpbD8hjtX_yiTqqL-mzGTT4TI6Gjix0G7wnDmgEoIep-xHK4aB9wcgnTgGxNyfD7EiwkwaseTN17e7PtDcKgDfYxZQr73oPMSEAh4ogy8iEWO0tNPQxBhb8NcJU_8Olotib9J-MwPuB2d6MTkmaNLTBZNaSkykkGwxAOw2o8QpobONzDnc4ndIHdVuz6vpLD6ZkySqqj4m0WDqv-zXUn9Ssr8fbajaAwwHjjTAkOcLxrmLfG7l8pGQq5f3-LzCdltjGjyzrvR8obwSiMjt5f3Vz0y_ClJ2DeHdcHldyT5kFxEtTpKxTvNN9qs7ZElE2WdTrk6rdwpikVw4BZ_YePfMVDzRH7ZOZSSdOs7fbXEf0PdpfuUbklmt3kWv2tg3jtR3te5kulXdKBEJ2NClRpBw0IwF72iEupX0Roo2EsygE65CYlOJX4scYKhkFa4rojiRoT7wvc1mMcxSIuBzl0mvkMo7c3UBmqLnOD-AwxH8ir4-A4f_sCWOYD0zztXG_yUBFq9jnD4zRsOcovh7IO2lSV-OOdR9CMaJ-GxlMoUiDYCN3emdTTGaROhPDlCTBkQhhKkNj-WpOwZ1j4abb1PnxcG4Oh-K1AM_AgLRC99dmM9lOMk3IW3Ti7hht5GJPXAHvPbDXeceU1nffstrrYIBkmQ1OqZTsq78E_s8B_HIszTAPOrGK5Fd_-vP9Def6Pi41dlOgPmkjsoRGUBLZD9oZS5q7Me3mE6Ee5jkaM4ZAXeCEn2HXj5dO4pMIxQWpiSgCsz7IOWA_o7VTSiVwQpkcEjU2n1ftmEF2Tk0IT_eTa3J5vYr-BnH3Ta1s79_ENs9z_5pgFntcmS9ilWAt6XluPAZwzTLmb6PCodkWPFZVPHRe354sXIS64RfjJ7h3Nzu-hOj_arlqzvZmEmwhm-5XDhrredJDfbuW9miIm0023ySz0MnHn1hIS7yn-0oqAkvDpyxu0b0I5Y3vbVsvAPLEnPHBfAtirhnCb9tcHGfYbcjoDrNJI9L4gTeMx30aL2y-wygBJYvzuEJ7qPnCBvFrPPIfirAzIgiuVc-v7ZtcgyC9pQ_ZosCaNbAO-Mjj765siRZOT_5zEZurw521EJxHnG9IxQgikWbp3zNUCCIxDBbc07chhnYf6NPyMHJ9CfBqnV8dMP_Zz_9xTBDTS7dz5tbTO75FFCqWEtNXYmHsUV6xe6EXUTfH3x9RIQo-VUzgzi8-WQguSP-m0rQGF3jTa3x6MsAKzMOJfSgHo0mblhozEAzrSeYdI3S-YMtQB9-UQY2Ze3uXa95Cysg3wnJYcv3ucDxPdApwNGFjStvd5i6W6uG1dA3iR4hOfjzNcmVJ5E2egExx2EJXMosg9uvHRc8nx02doM9RQzFZ4zO9Lpf_xq2GqBww1MmiUAQhRWWrYHvwE838X_ews7pRCbmA6_8gVsnmF9CyQmWeDCdHbyNb5yqQZMWqSQcemJwDx4C-GuggDqrvHpeW6nOJ5dCTiYUl_pV2gCrsnHvPmNeL597_LEh_rppEy_gJSDkUFnNxH9t3GEycHFX6UYsgs11TFAtEmaYluacHD7sEZr8PVyYcenKCquI9xvYjMcfSZrjC7KFeKbIs8WpXhXP1SBznQQMOVlGzzI00-dsWt_OfzjDfQEqlJFb65Huq0IBw2-hzUB2LDdEUWOamIQlgg2m2kutZdaydUSQGnP0DX58ouJnetOtNNyuojRPCkwaRwjUQhL_KcGAmvanp3kpFjM1eLVPBYnTmLyRkH4S5wxHYRGDZcXQ3dIQzVR9bJ_ezD_zwUhhrL4vV80RbOXPF5MWdxG06PCxNJGahNzolLwOt7QdsZufEO2UCgagGOyvDL-4TOB5oAKDaBpl4BCflok5no7scrOgjqPfXu76OWeCdXJ2qfl-QkIbJFXOw2M7k41SlNPq9nUuTL5G_t6SeNV3gIrefym8aTlRENHTpHNu1I6pL16hK-cdxFXSH8sle8EcpRAsISu0d5I2nDlHuAA0nhcASug"
     }
   ]
 }
@@ -1335,14 +1421,14 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
    or more literal condition hashes. A future extension could support a
    constraint-time predicate language (e.g., "the attestation MUST contain a
    hash matching this template") to reduce the need for pre-computed hashes
-   in mandate issuance. Deferred to v0.2.
+   in mandate issuance. Deferred to a future revision.
 
 4. **Multi-issuer composition.** Can a single `environment.wallet_state`
    constraint require attestations from two independent issuers
    (e.g., InsumerAPI and a second wallet-state issuer) for defence-in-depth?
    Current answer: compose two separate `environment.wallet_state` constraints
    in the mandate. A shorthand `required_issuers` array could be added in
-   v0.2 if there is demand.
+   a future revision if there is demand.
 
 5. **Family-wide `subject` binding.** LembaGang's review of this proposal
    raised a generalisation worth recording: every `environment.*` constraint
@@ -1364,6 +1450,7 @@ def check_wallet_state_constraint(constraint: dict, now_unix: int) -> dict:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 0.8-draft | 2026-09-08 | **Post-quantum companion, additively; live key set refreshed; Appendix A annotated; §4.5 worked-example hashes updated to the current key generation.** §4.7 gains two paragraphs describing the reference issuer's ML-DSA-65 ([FIPS 204]) companion — published as [RFC 9964] `AKP` entries in the same JWKS; `pqSig` signing the post-quantum domain tag + the exact classical preimage, `pqJwt` a compact JWS over its own Signing Input; reported by verifiers, as verifier-local policy above §4.2, as an independent verdict (`verified` / `refuted` / `absent` / `unverifiable`) — and states in terms that the MUST-implement does not move: ES256 stays, §4.1 and §4.2 are unchanged, this revision declares no successor, publication of the companion key is not the §4.7 readiness signal, and a verifier that ignores the companion verifies exactly as before. §6.8 gains the companion's security rationale. §7.3 gains the companion's wire fields (`pqSig`/`pqKid` beside `sig`/`kid` in every response; `pqJwt` additionally beside `jwt` in the JWT response) as response-object siblings, not JWT claims. §7.5's JWKS illustration is refreshed to the live five-entry set (three EC + two AKP, fetched 2026-09-08). Appendix A's dated capture keeps its v1-era `kid`, reproduced unchanged as its caption says, and gains a note that a fresh attestation may carry `insumer-attest-v1` or `insumer-attest-v2` and that the verifier selects by header `kid` within `trusted_jwks`. §4.5's two worked examples, which paired a v2-encoded request with the v1-generation `conditionHash`, now carry the hash every key created since the v2 rollout returns for that request (`0x7461…6132`, matching published vectors 01 and 12); Appendix A keeps its v1-generation hash, as its caption states. Appendix D.1's conformance sentence now attributes the verifier-side sections to the reference verifiers, cites §4.2's ten steps, and uses `kid`. §2.4's field heading drops its "(RECOMMENDED)" label and §4.4's cross-reference follows: Appendix C.3.3 names this exact heading as its worked example of redundancy avoidance ("the SHOULD carries the requirement and the RECOMMENDED label adds register noise"), `environment.market_state` applied it at v0.5.4, and this document had not. No sibling-mirror coordination applies: the companion paragraphs are wallet_state-local and PR #9 §4.7 is unaffected. Appendix D.1 gains the key-set shape, the companion row with the cross-signed key binding (anchored on Base block 50758053), `insumer-verify` 1.8.3+ as a reference verifier, and the published test vectors. No normative change to the §4.1 interface or the §4.2 algorithm. Sources: the live JWKS, `/.well-known/state-attestation-test-vectors.json` (the published contract), and `/.well-known/pq-key-binding.json`, all fetched 2026-09-08. |
 | 0.7-draft | 2026-08-25 | **Generalises signing-key discovery, condition-hash guidance, and threshold encoding to the reference issuer's current published surface.** The reference issuer publishes more than one signing key and encodes token thresholds as canonical decimal strings; this revision broadens the specification to describe that surface directly. **(1) §4 `expected_kid` generalised from REQUIRED to OPTIONAL** across eight touchpoints — the §4 field row, the structural-validation bullet, the §4.1 JWT-header `kid` row, §4.2 Steps 1 and 3, the §5.4 error table, and both reference verifiers (§7.6 JavaScript, §7.7 Python), which now treat the pin as conditional and select the signing key by the JWT header `kid`. Key discovery is now expressed as selection within the key set published at `trusted_jwks`, using the JWT header `kid`; `expected_kid` remains available as a strict pin for deployments that want one, and its §4.8 scope classification is unchanged. This admits issuers that publish several keys and issuers that rotate, without requiring a new mandate per key. **§4.2 Step 4 is unchanged** — its existing key-set lookup already expresses the selection rule, so the generalisation is carried entirely by making the Step 3 pin conditional. Adds a SHOULD in §4.2 that the verifier report the `kid` used in its §5.4 diagnostic output, adds a §5.4 row for a JWT header carrying no `kid`, and the two §4 constraint examples now show the default discovery path. **(2) §7.2 and the Appendix D canonicalization row strengthened.** `evaluatedCondition` is now described as the issuer-*normalized* form of the condition, and the section states which values normalization supplies — token decimals detected from the contract, a defaulted comparison operator, a canonicalized currency code — none of which a mandate issuer holds. Serialization and field set are described as issuer-published and versioned with the issuer's signing-key generation, with `openapi.yaml` named as the authoritative definition for each generation, so the section stays correct across future generations rather than restating one. Guidance for populating `required_condition_hashes` is strengthened accordingly: a mandate issuer obtains each `conditionHash` from the attestation issuer — for example by requesting one attestation over the intended conditions and reading the returned values — rather than deriving it locally. Because the hash is a pure rule fingerprint, independent of wallet and outcome, a value obtained this way is stable for that rule and binds the mandate before any operative attestation exists. The existing provisions that other conformant issuers MAY use a different algorithm, and that `required_condition_hashes` values are opaque to the verifier (§4.2 Step 10), are unchanged. **(3) Request examples aligned to canonical decimal-string thresholds** at the two §4 constraint examples (`"threshold": "1"`), matching the encoding documented in `openapi.yaml`. The Appendix A request is a dated capture and is reproduced unchanged. `"decimals": 6` is retained: it remains an OPTIONAL request field, auto-detected from the contract when omitted. **(4) §7.5 expanded to the full published key set** (three keys), re-dated 2026-08-25, and captioned to state that the trust boundary is the set fetched from `trusted_jwks` at verification time rather than any published snapshot. §7.1's key-curve row now describes the curve alone, with key identity carried by discovery. **(5) Appendix D**: the signing-key row now describes discovery — keys published at the JWKS endpoint and selected by header `kid`, with no single identifier held out as permanent — so it remains accurate across rotations; coverage updated to 38 chains (32 EVM chains plus Solana, XRP Ledger, Bitcoin, Tron, Stellar, and Sui) per `openapi.yaml` `ChainId`. **(6) Chain coverage updated to 38** at §7.1 prose, the §7.1 Supported-chains row, and the Appendix D coverage row. **(7) Appendix A**: agent-provisioning prose enumerates all three supported payment assets (`USDC, USDT, or BTC`), matching §7.1 and §7.4; and a note placed above the capture records the whole of it — request and vectors alike — as a dated v1-generation capture reproduced unchanged, noting that the recorded `conditionHash` is the value that generation returned for the request shown. **Unchanged:** the Appendix A capture, request and vectors alike; JWT TTL 1800 s; §7.1 and §7.4 payment-method prose; all endpoint paths, API base, and JWKS path; ES256/P-256; Appendix C register discipline; and the dated v0.6.4 changelog row, which is a historical record and is not rewritten. Ratio and invariant condition types remain out of scope — adding them is specification expansion rather than alignment with the current published surface. Document header advances `0.6-draft` to `0.7-draft`: the patch-level convention affirmed at v0.5.1 / v0.5.3 / v0.6.1 / v0.6.2 / v0.6.3 / v0.6.4 is conditioned on no §4 schema changes, and this revision changes a §4 field's requiredness and generalises the §4.2 verification algorithm. No sibling-mirror coordination applies: every touchpoint is per-type-trust-root-mechanism-bound or per-type-evaluation-mechanism-bound under §4.8, and `environment.market_state` uses an RFC 8615 key registry and `oracle_public_key_id` rather than a JOSE `kid` binding, so nothing here is portable to PR #9. Sole-authored. |
 | 0.6.5-draft | 2026-05-06 | **§4.7 algorithm-deprecation discipline (family-wide + per-type)** — adds family-wide algorithm-deprecation prose to §4.7 mirroring `draft-borthwick-msebenzi-environment-state-00 v0.2-draft` §4.3 family-wide SHOULD (type specification authors SHOULD specify a deprecation mechanism for the type's MUST-implement algorithm before that algorithm is needed, including conditions, timeline for verifier migration, and backward-compatibility guarantees during the transition). Adds per-type `environment.wallet_state` deprecation mechanism: **conditions** (NIST / IETF JOSE WG / RFC 8725 update guidance, or cryptographic break in the literature affecting the type's threat model), **timeline** (≥12-month verifier-migration window from minor-version revision publication; parallel verification during window; verifier rejection of deprecated algorithm after the window's end date), **backward compatibility** (mandate-issuer migration upon attestation-issuer JWKS readiness; verifier-side detection via standard JWKS key-set inspection). Updates §4.7 PR #9 coordination Note to reflect PR #9 §4.7 as the verbatim-portable target (PR #9's algorithm-agility section sits at §4.7); deprecation mechanism block joins table rows in the per-type-swap surface; family-wide prose (algorithm-agnostic policy paragraph, single-algorithm lock-in paragraph, family-wide deprecation paragraph) is verbatim-portable. Closes §3.4(5) family-membership obligation under the I-D family-definition contract. Document header stays at `0.6-draft` per patch-level convention established at v0.5.1 and reaffirmed at v0.5.3 / v0.6.1 / v0.6.2 / v0.6.3 / v0.6.4. No algorithm changes; no security-model changes; no §4 schema changes; no InsumerAPI-side code changes required. Co-drafted with LembaGang (Headless Oracle); family-wide prose remains verbatim-portable to `environment.market_state` §4.7 on PR #9 per the existing lockstep pattern. |
 | 0.6.4-draft | 2026-05-03 | **Appendix D: Implementation Status (RFC 6982)** — new appendix listing the running-code implementations of the `environment.*` family. D.1 records InsumerAPI as the running implementation of `environment.wallet_state` — endpoints, License row (proprietary, copyright Douglas Borthwick), ES256/P-256 signing per §4.7 MUST-implement, kid `insumer-attest-v1`, 1800-second JWT TTL, 33-chain coverage (30 EVM + Solana + XRPL + Bitcoin), USDC/USDT/BTC agent-native key provisioning at `POST /v1/keys/buy` per §7.4, condition hash canonicalization per §7.2, and conformance pointer set for §4.1 / §4.2 / §4.6 / §4.7 / §4.8 / §5.5 / §6.5 / §6.8 / §6.9. Refers to §7 for full reference-implementation prose rather than duplicating. D.2 records Headless Oracle as the running implementation of the sibling `environment.market_state` constraint type ([PR #9](https://github.com/agent-intent/verifiable-intent/pull/9)) — endpoints, Ed25519 signing per `environment.market_state` §4.7, 28-exchange coverage, reference verifier; listed for `environment.*` family completeness, with the canonical Implementation Status appendix for `environment.market_state` belonging in PR #9 (editor's call on Michael Msebenzi / LembaGang's side). D.3 disclaimer states that listing is not endorsement and verifiers MUST independently verify per §4.2 regardless of Appendix D listing. Per RFC 6982 §2, the appendix is intended to be removed by the RFC Editor before any final standards-track publication; the GitHub history of this Internet-Draft retains it permanently. **§7.1 + §7.4 source-of-truth alignment**: `POST /v1/keys/buy` payment methods updated from "USDC or BTC" / "USDC (or BTC)" to "USDC, USDT, or BTC" matching production behavior (`openapi.yaml` PaymentChainId: EVM chains and Solana accept USDC and USDT; Bitcoin accepts BTC). §7.4 prose around agent-key-bootstrap rationale generalised from "the authority to spend USDC" to "on-chain spending authority" — drops the canonical-token enumeration mismatch with the §7.4 endpoint enumeration above it without losing the rhetorical argument. Document header stays at `0.6-draft`; v0.6.4 is a patch-level refinement adding an informative appendix and aligning §7 prose with production — no algorithm changes, no security-model changes, no §4 schema changes, no InsumerAPI-side code changes required. Sibling-mirror coordination: independent of the parallel Appendix D landing on the `environment.market_state` side per LembaGang's [`LembaGang/verifiable-intent` commit `21a156cd`](https://github.com/LembaGang/verifiable-intent/commit/21a156cd) anchor (*"a parallel Appendix D on PR #22 is the editor's call on the environment.wallet_state side and is expected to land independently on Douglas Borthwick's timing"*). |
@@ -1392,7 +1479,7 @@ The request and vectors below are a dated capture from a 2026-04-15 live call,
 retained as a historical record and reproduced unchanged. They were produced
 under a v1-generation signing key, and the recorded `conditionHash` is the value
 that generation returned for the request shown. The current published key set is
-at §7.5, and the threshold encoding current keys expect is in `openapi.yaml`.
+at §7.5, and the current threshold encoding is in `openapi.yaml`.
 
 **Request** (POST `https://api.insumermodel.com/v1/attest`):
 
@@ -1421,6 +1508,12 @@ at §7.5, and the threshold encoding current keys expect is in `openapi.yaml`.
   "kid": "insumer-attest-v1"
 }
 ```
+
+This capture predates the v2 rollout and so carries `insumer-attest-v1`,
+which remains published. A fresh attestation may carry `insumer-attest-v1` or
+`insumer-attest-v2`; a verifier selects the key by the header `kid` within
+the set fetched from `trusted_jwks` (§4.2 Step 4; current set at §7.5) and
+never assumes one.
 
 **Response JWT payload** (base64url-decoded, 2026-04-15 live call):
 
@@ -1456,7 +1549,7 @@ at §7.5, and the threshold encoding current keys expect is in `openapi.yaml`.
 ```
 
 Fetch a fresh JWT at `POST https://api.insumermodel.com/v1/attest` and verify
-it against the JWKS above using any standard JOSE library. Human developers
+it against the key set at `trusted_jwks` (§7.5) using any standard JOSE library. Human developers
 can get a free-tier key in ~10 seconds at
 [`https://insumermodel.com/developers/`](https://insumermodel.com/developers/);
 autonomous agents can self-provision via `POST /v1/keys/buy` using an
@@ -1562,16 +1655,18 @@ This appendix records the running-code implementations of `environment.wallet_st
 | Attestation endpoint | `POST https://api.insumermodel.com/v1/attest` (requires `X-API-Key`) |
 | JWKS endpoint | `GET https://api.insumermodel.com/.well-known/jwks.json` (RFC 7517) |
 | Signing algorithm | ES256 / P-256 (RFC 7518), per §4.7 MUST-implement |
-| Signing key discovery | Keys are published at the JWKS endpoint above and selected by the JWT header `kid`. The published set carries more than one key identifier and changes without notice; no single identifier is guaranteed stable. |
+| Signing key discovery | Keys are published at the JWKS endpoint above and selected by the JWT header `kid`. The published set carries more than one key identifier and changes without notice; no single identifier is guaranteed stable. As of 2026-09-08 the set holds five entries over two keys: three EC entries on one P-256 key (`insumer-attest-v1`, `insumer-attest-v2`, `insumer-trust-v2`) and two [RFC 9964] `AKP` entries on one ML-DSA-65 key (`insumer-attest-pq1`, `insumer-trust-pq1`), appended last. |
+| Post-quantum companion | Since 2026-09-01, every `/v1/attest` response carries an ML-DSA-65 ([FIPS 204] ML-DSA, not HashML-DSA; empty context) companion, additively: `pqSig`/`pqKid` beside `sig`/`kid` in every response, raw and JWT alike, where `pqSig` signs the domain tag `insumer.attestation.pq1` + newline + the classical preimage of `sig`; and `pqJwt` beside `jwt` in the JWT response, a compact JWS over its own Signing Input (§7.3). The companion key is bound to the classical key by a content-addressed, PQ-self-signed, classically cross-signed statement at `https://insumermodel.com/.well-known/pq-key-binding.json`, anchored on Base (block 50758053, 2026-09-01). Per §4.7, ES256 remains the MUST-implement and the companion is reported as an independent verdict. |
 | Receipt format | ES256 JWT (RFC 7515) carrying the seven REQUIRED claims at §4.1 (`iss`, `sub`, `jti`, `iat`, `exp`, `pass`, `conditionHash`) plus the implementation-specific OPTIONAL claims at §7.3 (`results`, `blockNumber`, `blockTimestamp`) |
 | Condition hash canonicalization | SHA-256 over a canonical JSON serialization of the normalized `evaluatedCondition`, versioned with the signing-key generation; authoritative definition in `openapi.yaml`, per §7.2 |
 | JWT TTL | 1800 seconds (`exp = iat + 1800`) |
 | Coverage | 38 chains (32 EVM chains plus Solana, XRP Ledger, Bitcoin, Tron, Stellar, and Sui); full enumeration at [`https://api.insumermodel.com/openapi.yaml`](https://api.insumermodel.com/openapi.yaml) |
 | Agent-native key provisioning | `POST /v1/keys/buy` — no auth, wallet is identity, USDC/USDT/BTC on-chain payment, per §7.4 |
-| Reference verifiers | [InsumerAPI examples](https://github.com/douglasborthwick-crypto/insumer-examples) (end-to-end verification scripts); minimal constraint verifier (JavaScript, `jose`) at §7.6; fail-closed integration pattern (Python) at §7.7 |
+| Reference verifiers | `insumer-verify` 1.8.3 or later (npm), reporting five independent verdicts — signature, condition hashes, freshness, expiry, companion; [InsumerAPI examples](https://github.com/douglasborthwick-crypto/insumer-examples) (end-to-end verification scripts); minimal constraint verifier (JavaScript, `jose`) at §7.6; fail-closed integration pattern (Python) at §7.7 |
 | OpenAPI spec | `GET https://api.insumermodel.com/openapi.yaml` |
+| Published test vectors | `GET https://insumermodel.com/.well-known/state-attestation-test-vectors.json` — frozen attestations with expected verdicts, including the companion, and the recomputation procedure a stranger can run |
 
-**Conformance to this specification.** The InsumerAPI deployment implements the §4.1 attestation interface (the seven REQUIRED claims; the §7.3 implementation-specific OPTIONAL claims layer on top); the §4.2 verification algorithm Steps 1 through 11; the §4.6 family-wide `max_attestation_age` semantics (verified at the constraint level, not via any deployment-side TTL); §4.7 ES256 MUST-implement; §4.8 field scope declarations across all current `environment.wallet_state` fields; §5.5 Family Composition conjunction and per-member diagnostic completeness; §6.5 Constraint Stripping rejection per the §6.5 normative MUSTs; §6.8 RFC 7517 JWKS caching with `key_id`-mismatch cache invalidation and the §4 `stale_cache_fallback_permitted` honor pattern; and §6.9 Cross-Chain Temporal Consistency including verifier-side `blockTimestamp` truncation and `finality_depth` measurement-basis discipline.
+**Conformance to this specification.** The InsumerAPI deployment, together with the reference verifiers listed above, implements the §4.1 attestation interface (the seven REQUIRED claims; the §7.3 implementation-specific OPTIONAL claims layer on top); the §4.2 verification algorithm Steps 1 through 10; the §4.6 family-wide `max_attestation_age` semantics (verified at the constraint level, not via any deployment-side TTL); §4.7 ES256 MUST-implement; §4.8 field scope declarations across all current `environment.wallet_state` fields; §5.5 Family Composition conjunction and per-member diagnostic completeness; §6.5 Constraint Stripping rejection per the §6.5 normative MUSTs; §6.8 RFC 7517 JWKS caching with `kid`-mismatch cache invalidation and the §4 `stale_cache_fallback_permitted` honor pattern; and §6.9 Cross-Chain Temporal Consistency including verifier-side `blockTimestamp` truncation and `finality_depth` measurement-basis discipline.
 
 Refer to **§7. Reference Implementation: InsumerAPI** for the full reference-implementation prose: §7.1 overview, §7.2 condition hash canonicalization, §7.3 implementation-specific response claims, §7.4 agent-native key provisioning, §7.5 live JWKS, §7.6 minimal constraint verifier (JavaScript, `jose`), §7.7 fail-closed integration pattern (Python).
 
