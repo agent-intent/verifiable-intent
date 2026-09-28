@@ -115,6 +115,7 @@ def create_layer2_autonomous(
     - Standalone acceptable item disclosures (referenced by hash in constraints)
     - open_checkout mandate disclosure (with constraint refs)
     - open_payment mandate disclosure (with constraint refs + payment_instrument)
+    - prompt_summary disclosure, when the mandate carries one
     """
     if mandate.mode != MandateMode.AUTONOMOUS:
         actual = mandate.mode.value if isinstance(mandate.mode, MandateMode) else str(mandate.mode)
@@ -180,7 +181,13 @@ def create_layer2_autonomous(
         payment_disc = create_disclosure(None, payment_dict)
         disclosures.append(payment_disc)
 
-    # 5. Build delegate_payload with references to mandate disclosures
+    # 5. prompt_summary disclosure (selectively disclosable; see the Layer 2
+    # claim table in spec/README.md). Appended last so the positions of the
+    # disclosures above are unchanged.
+    if mandate.prompt_summary is not None:
+        disclosures.append(create_disclosure("prompt_summary", mandate.prompt_summary))
+
+    # 6. Build delegate_payload with references to mandate disclosures
     delegate_payload = []
     if checkout_disc:
         delegate_payload.append(create_delegate_ref(hash_disclosure(checkout_disc)))
