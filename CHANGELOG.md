@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Fixed
+
+- `create_layer2_autonomous` now writes `UserMandate.prompt_summary` into the checkout mandate disclosure (credential-format.md §4.5.1); it was accepted but silently dropped.
 
 ## [0.1.0] - 2026-02-19
 

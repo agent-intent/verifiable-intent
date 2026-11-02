@@ -36,7 +36,7 @@ from verifiable_intent import (
     create_layer3_payment,
     verify_chain,
 )
-from verifiable_intent.crypto.disclosure import build_selective_presentation, hash_bytes
+from verifiable_intent.crypto.disclosure import build_selective_presentation, decode_disclosure, hash_bytes
 
 
 def _find_disclosure(sd_jwt, predicate):
@@ -48,7 +48,7 @@ def _find_disclosure(sd_jwt, predicate):
     return None
 
 
-def _build_full_chain():
+def _build_full_chain(prompt_summary=None):
     """Build a complete v2 3-layer chain. Returns all components."""
     issuer = get_issuer_keys()
     user = get_user_keys()
@@ -104,6 +104,7 @@ def _build_full_chain():
         payment_mandate=payment_mandate,
         merchants=MERCHANTS,
         acceptable_items=ACCEPTABLE_ITEMS,
+        prompt_summary=prompt_summary,
     )
     l2 = create_layer2_autonomous(user_mandate, user.private_key)
     l2_ser = l2.serialize()
@@ -168,7 +169,36 @@ def _build_full_chain():
         "issuer": issuer,
         "user": user,
         "agent": agent,
+        "checkout_disc": checkout_disc,
     }
+
+
+class TestPromptSummary:
+    """The user's prompt_summary is signed inside the checkout mandate (credential-format.md §4.5.1)."""
+
+    def test_prompt_summary_in_checkout_mandate(self):
+        chain = _build_full_chain(prompt_summary="A beginner racket under $300 that I can return")
+        checkout = decode_disclosure(chain["checkout_disc"])[-1]
+        assert checkout["prompt_summary"] == "A beginner racket under $300 that I can return"
+
+    def test_chain_with_prompt_summary_verifies(self):
+        chain = _build_full_chain(prompt_summary="A beginner racket under $300 that I can return")
+        result = verify_chain(
+            chain["l1"],
+            chain["l2"],
+            l3_payment=chain["l3a"],
+            l3_checkout=chain["l3b"],
+            issuer_public_key=chain["issuer"].public_key,
+            l1_serialized=chain["l1_ser"],
+            l2_serialized=chain["l2_ser"],
+            l2_payment_serialized=chain.get("l2_payment_ser"),
+            l2_checkout_serialized=chain.get("l2_checkout_ser"),
+        )
+        assert result.valid, f"Chain verification failed: {result.errors}"
+
+    def test_no_prompt_summary_no_field(self):
+        chain = _build_full_chain()
+        assert "prompt_summary" not in decode_disclosure(chain["checkout_disc"])[-1]
 
 
 class TestAutonomousChainCreation:
