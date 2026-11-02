@@ -153,6 +153,10 @@ def create_layer2_autonomous(
                         original_items, mandate.acceptable_items, item_disc_hashes
                     )
 
+        # The user's intent travels with the checkout mandate (credential-format.md §4.5.1)
+        if mandate.prompt_summary is not None:
+            checkout_dict["prompt_summary"] = mandate.prompt_summary
+
         checkout_disc = create_disclosure(None, checkout_dict)
         disclosures.append(checkout_disc)
 
