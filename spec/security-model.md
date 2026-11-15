@@ -192,9 +192,15 @@ This section describes attacks that implementers should understand and test agai
 
 **What payment networks must enforce**:
 
-Payment networks MUST track L3a issuance and cumulative spend against each L2 mandate pair. The L2 is identified by its `sd_hash` as bound in the L3a payload. When a payment network receives an L3a for authorization, it MUST:
+Payment networks MUST track L3a issuance and cumulative spend against each L2 mandate pair. The L3a `sd_hash` binds a particular selective presentation of L2, not a presentation-independent accounting identity. For example, selecting a different allowed merchant changes the merchant disclosure and therefore the L3a `sd_hash`, even when the payment mandate and its cumulative budget are unchanged.
 
-1. Look up the L2 (by `sd_hash`) in its transaction log.
+After verifying the credential chain and its presentation binding, the network MUST resolve the presented payment mandate to the same authenticated accounting record for that issued L2 mandate pair, regardless of which allowed merchant is disclosed. It MUST NOT use the L3a `sd_hash` alone as the key for cumulative spend or occurrence counts. A new presentation, nonce, or agent signature MUST NOT create a fresh allowance for the same mandate pair.
+
+The mapping to an accounting record is network-managed state; this specification does not define a new wire identifier or a canonical hash construction for it. The mapping MUST be based on verified authority, not an untrusted caller-supplied identifier. Networks MUST distinguish separate mandate pairs within an L2, and MUST define whether reissuance or renewal continues an existing allowance or creates a separately authorized allowance. If a network cannot establish the required association, it MUST reject an authorization that depends on that accounting state.
+
+When a payment network receives an L3a for authorization, it MUST:
+
+1. Verify the L3a presentation binding, then look up the authenticated accounting record for its L2 mandate pair as described above.
 2. Determine the transaction model:
    - **Base model** (no `mandate.payment.agent_recurrence`): Verify the mandate pair has not been fulfilled. Reject if already used.
    - **Multi-transaction model** (`mandate.payment.agent_recurrence` present): Check occurrence count and cumulative budget.
